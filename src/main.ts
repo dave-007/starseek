@@ -294,7 +294,10 @@ let stickyPlanetExpiry = 0     // animTime when sticky bubble should hide
 let solarCamAngle = 0  // kept for compat; replaced by theta/phi
 let solarCamTheta = 0        // azimuth around Y
 let solarCamPhi   = Math.PI / 3  // elevation from top (radians)
-const SOLAR_CAM_DIST = 14
+let solarCamDist  = 14
+let solarCamDistTarget = 14
+const SOLAR_CAM_DIST_MIN = 3
+const SOLAR_CAM_DIST_MAX = 28
 let solarVelTheta = 0
 let solarVelPhi   = 0
 let solarDragSpeed = 0
@@ -335,6 +338,8 @@ function enterSolarSystem() {
   scene.add(solarSystem.group)
   solarCamTheta = 0
   solarCamPhi   = Math.PI / 3
+  solarCamDist  = 14
+  solarCamDistTarget = 14
   solarVelTheta = 0
   solarVelPhi   = 0
   const cp = solarCamPos()
@@ -635,11 +640,18 @@ let mouseX = 0, mouseY = 0
 // Compute solar camera world position from spherical coords
 function solarCamPos(): THREE.Vector3 {
   return new THREE.Vector3(
-    Math.sin(solarCamPhi) * Math.cos(solarCamTheta) * SOLAR_CAM_DIST,
-    Math.cos(solarCamPhi) * SOLAR_CAM_DIST,
-    Math.sin(solarCamPhi) * Math.sin(solarCamTheta) * SOLAR_CAM_DIST
+    Math.sin(solarCamPhi) * Math.cos(solarCamTheta) * solarCamDist,
+    Math.cos(solarCamPhi) * solarCamDist,
+    Math.sin(solarCamPhi) * Math.sin(solarCamTheta) * solarCamDist
   )
 }
+
+renderer.domElement.addEventListener('wheel', (e) => {
+  if (state !== 'solar-system') return
+  e.preventDefault()
+  const delta = e.deltaY > 0 ? 1.12 : 0.89   // scroll down = zoom out
+  solarCamDistTarget = Math.max(SOLAR_CAM_DIST_MIN, Math.min(SOLAR_CAM_DIST_MAX, solarCamDistTarget * delta))
+}, { passive: false })
 
 renderer.domElement.addEventListener('mousedown', (e) => {
   unlockAudio()
@@ -709,7 +721,7 @@ document.addEventListener('mousemove', (e) => {
     solarVelPhi   = dy * scale
     solarDragSpeed = Math.sqrt(dx * dx + dy * dy)
     solarCamTheta += solarVelTheta
-    solarCamPhi = Math.max(0.12, Math.min(Math.PI / 2, solarCamPhi + solarVelPhi))
+    solarCamPhi = Math.max(0.05, Math.min(Math.PI - 0.05, solarCamPhi + solarVelPhi))
   }
   prevMouseX = e.clientX; prevMouseY = e.clientY
 })
@@ -906,8 +918,11 @@ function animate(t: number) {
       solarVelTheta += (mouseX * 0.00018 + 0.00033 - solarVelTheta) * 0.027
       solarVelPhi   += (-mouseY * 0.00012 - solarVelPhi) * 0.027
       solarCamTheta += solarVelTheta
-      solarCamPhi = Math.max(0.12, Math.min(Math.PI / 2, solarCamPhi + solarVelPhi))
+      solarCamPhi = Math.max(0.05, Math.min(Math.PI - 0.05, solarCamPhi + solarVelPhi))
     }
+
+    // Smooth zoom
+    solarCamDist += (solarCamDistTarget - solarCamDist) * 0.1
 
     camera.position.copy(solarCamPos())
     camera.lookAt(0, 0, 0)
