@@ -1601,8 +1601,7 @@ function animate(t: number) {
           `<span style="opacity:0.3"> │ </span>` +
           `${attBar} <span style="color:rgba(255,255,255,0.35)">${Math.round(att * 100)}%</span>`
         
-        // Time pressure visual effect
-        const timerFrac = Math.max(0, cd.stepTimer / cd.timePerStep)
+        // Time pressure visual effect (using timerFrac calculated above)
         if (timerFrac < 0.3) {
           // Last 30% of time - show pulsing red border
           timePressureOverlay.style.display = 'block'
