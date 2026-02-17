@@ -1223,6 +1223,15 @@ function animate(t: number) {
   } else if (state === 'planet') {
     planetView?.update(dt)
 
+    // Auto-select the required element when the challenge step changes
+    if (planetView) {
+      const req = planetView.requiredElement
+      if (req && req !== selectedElement) {
+        selectedElement = req
+        updateElementUI()
+      }
+    }
+
     // Spin inertia
     if (!isPlanetSpinning && planetView) {
       planetVelX *= 0.92
@@ -1277,8 +1286,13 @@ function animate(t: number) {
           ? `<span style="color:#44ff88;opacity:${cd.successFlash}"> ✓</span>`
           : ''
 
+        // Instruction hint when no success/fail flash is active
+        const hintHtml = (cd.failFlash < 0.3 && cd.successFlash < 0.3)
+          ? `<span style="color:rgba(255,255,255,0.22);font-size:9px">click the glowing zone  </span>`
+          : ''
+
         planetStatus.innerHTML =
-          `${stepHtml}${flashHtml}` +
+          `${hintHtml}${stepHtml}${flashHtml}` +
           `<span style="opacity:0.3"> │ </span>` +
           `${timerBar}` +
           `<span style="opacity:0.3"> │ </span>` +
