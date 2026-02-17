@@ -8,6 +8,8 @@ import {
   type Phenomenon, type PhenomenonKey,
   createRadio, createUFO, createComet, createCityLights, createFormation, createAnomaly
 } from './phenomena'
+import { MusicEngine } from './audio/index'
+import { DevMenu } from './devmenu'
 
 // ---------------------------------------------------------------------------
 // Renderer & Scene
@@ -115,6 +117,26 @@ for (let i = 0; i < systemCount; i++) {
   const audioSeed = Math.round((localPos.x + localPos.y + localPos.z + 3) * 1e6)
   systems.push({ id: i, localPos, dot, color, rings, pulseSpeed, maxScale, audio: new SystemLoop(audioSeed), audioSeed })
 }
+
+// ---------------------------------------------------------------------------
+// Music Engine
+// ---------------------------------------------------------------------------
+// Lazy initialization to avoid Tone.js blocking page load
+let musicEngine: MusicEngine | null = null
+
+function getMusicEngine(): MusicEngine {
+  if (!musicEngine) {
+    musicEngine = new MusicEngine()
+  }
+  return musicEngine
+}
+
+// Dev menu for tuning music (press ` to toggle)
+const devMenu = new DevMenu({
+  onBPMChange: (bpm) => musicEngine?.setBPM(bpm),
+  onPlay: async () => { await getMusicEngine().start() },
+  onStop: () => musicEngine?.stop(),
+})
 
 // ---------------------------------------------------------------------------
 // UI
@@ -326,7 +348,7 @@ function startZoomIn(sys: System) {
   if (activeAudio) { activeAudio.stop(); activeAudio = null }
 }
 
-function enterSolarSystem() {
+async function enterSolarSystem() {
   hoveredSystem = null   // clear stale galaxy hover so mouseup can't retrigger zoom-in
   stickyPlanetIdx = -1
   galaxyGroup.visible = false
@@ -343,6 +365,13 @@ function enterSolarSystem() {
   state = 'solar-system'
   overlay.style.opacity = '0'
   phenomenaPanel.style.display = 'flex'
+
+  // Start music and assign tracks to planets
+  const engine = getMusicEngine()
+  engine.generateFromSeed(sys.audioSeed)
+  engine.assignPlanetTracks(solarSystem.planetInfos.length)
+  // Don't mute - orbit proximity will control track levels
+  await engine.start()
 }
 
 function goBack() {
@@ -355,6 +384,7 @@ function goBack() {
   overlay.style.opacity = '1'
   setTimeout(() => {
     if (activeAudio) { activeAudio.stop(); activeAudio = null }
+    musicEngine?.stop()
     if (solarSystem) { scene.remove(solarSystem.group); solarSystem.dispose(); solarSystem = null }
     galaxyGroup.visible = true
     setGalaxyOpacity(1)
@@ -618,6 +648,10 @@ function exitPlanet() {
 // ---------------------------------------------------------------------------
 const mouse = new THREE.Vector2()
 const raycaster = new THREE.Raycaster()
+
+// Invisible plane for orbit proximity detection (y=0, the orbital plane)
+const orbitalPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+const orbitHitPoint = new THREE.Vector3()
 let hoveredSystem: System | null = null
 let activeAudio: SystemLoop | null = null
 let isDragging = false
@@ -671,7 +705,9 @@ document.addEventListener('mouseup', (e) => {
   } else if (state === 'solar-system') {
     if (activeCorner >= 0) goBack()
     else if (Math.abs(dx) < 4 && Math.abs(dy) < 4 && currentHoveredPlanetIdx >= 0) {
-      enterPlanet(currentHoveredPlanetIdx)
+      // Toggle this planet's music track
+      const engine = getMusicEngine()
+      engine.togglePlanet(currentHoveredPlanetIdx)
     }
   }
 })
@@ -829,6 +865,23 @@ function animate(t: number) {
     }
     currentHoveredPlanetIdx = hoveredPlanetIdx  // expose for mouseup
 
+    // Orbit proximity detection: raycast onto the orbital plane
+    let orbitProximities: number[] = []
+    if (solarSystem) {
+      // Account for the solar system's tilt when intersecting the plane
+      const tiltedNormal = new THREE.Vector3(0, 1, 0).applyEuler(solarSystem.group.rotation)
+      const tiltedPlane = new THREE.Plane(tiltedNormal, 0)
+
+      if (raycaster.ray.intersectPlane(tiltedPlane, orbitHitPoint)) {
+        // Get distance from star center (accounting for group position)
+        const distFromCenter = orbitHitPoint.length()
+        orbitProximities = solarSystem.getOrbitProximities(distFromCenter, 0.5)
+
+        // Update music levels based on proximity
+        getMusicEngine().updatePlanetLevels(orbitProximities)
+      }
+    }
+
     // Audio: star hover plays the system loop
     const wantAudio = starHovered
     if (wantAudio && !activeAudio && selectedSystem) {
@@ -893,7 +946,8 @@ function animate(t: number) {
     }
 
     renderer.domElement.style.cursor = corner >= 0 ? 'pointer' : (starHovered || hoveredPlanetIdx >= 0) ? 'pointer' : (isDragging ? 'grabbing' : 'grab')
-    solarSystem?.update(dt, starHovered, hoveredPlanetIdx)
+    const activePlanets = musicEngine?.getActivePlanets() ?? []
+    solarSystem?.update(dt, starHovered, hoveredPlanetIdx, activePlanets, orbitProximities)
 
     // Time warp on drag (same as galaxy)
     const solarTargetScale = isDragging ? 1 + solarDragSpeed * 0.18 : 1.0

@@ -76,6 +76,19 @@ export class SolarSystem {
   private orbitAngles: number[] = []
   private orbitRadii:  number[] = []
   private orbitSpeeds: number[] = []
+  private orbitLines:  THREE.Line[] = []
+  private orbitBaseColors: THREE.Color[] = []
+
+  // Expose orbit radii for proximity detection
+  getOrbitRadii(): number[] { return this.orbitRadii }
+
+  // Get proximity info for each orbit (0 = on orbit, 1 = far away)
+  getOrbitProximities(distanceFromCenter: number, threshold = 0.4): number[] {
+    return this.orbitRadii.map(r => {
+      const dist = Math.abs(distanceFromCenter - r)
+      return Math.min(1, dist / threshold)
+    })
+  }
   private moonData:    { mesh: THREE.Mesh; dist: number; speed: number; angle: number }[][] = []
 
   // Asteroid belts — InstancedMesh with per-asteroid tumble data
@@ -170,7 +183,10 @@ export class SolarSystem {
         })
       )
       this.group.add(planetMesh)
-      this.group.add(makeOrbitLine(r, displayC))
+      const orbitLine = makeOrbitLine(r, displayC)
+      this.group.add(orbitLine)
+      this.orbitLines.push(orbitLine)
+      this.orbitBaseColors.push(displayC.clone())
 
       // Kepler: inner planets orbit faster (speed ∝ 1/√r)
       const keplerSpeed = 0.28 / Math.sqrt(r)
@@ -328,7 +344,7 @@ export class SolarSystem {
     this.group.rotation.x = 0.28
   }
 
-  update(dt: number, starHovered = false, hoveredPlanetIdx = -1) {
+  update(dt: number, starHovered = false, hoveredPlanetIdx = -1, activePlanets: number[] = [], orbitProximities: number[] = []) {
     // Star
     const starMat = this.star.material as THREE.MeshBasicMaterial
     starMat.color.lerp(starHovered ? new THREE.Color(0xffffff) : this.starBaseColor, 0.12)
@@ -347,6 +363,7 @@ export class SolarSystem {
     for (let i = 0; i < this.planetInfos.length; i++) {
       const pi  = this.planetInfos[i]
       const hov = i === hoveredPlanetIdx
+      const active = activePlanets.includes(i)
 
       // Slow orbit to 15% speed when hovered so it's easier to click
       const orbitMul = hov ? 0.15 : 1.0
@@ -356,17 +373,20 @@ export class SolarSystem {
         0,
         Math.sin(this.orbitAngles[i]) * this.orbitRadii[i]
       )
-      pi.mesh.rotation.y += dt * 0.4
+      // Faster spin when playing music
+      pi.mesh.rotation.y += dt * (active ? 1.2 : 0.4)
 
       for (const m of this.moonData[i]) {
         m.angle += m.speed * dt
         m.mesh.position.set(Math.cos(m.angle) * m.dist, 0, Math.sin(m.angle) * m.dist)
       }
 
-      // Highlight
+      // Highlight - brighter when active (playing music)
       const mat = pi.mesh.material as THREE.MeshStandardMaterial
-      mat.color.lerp(hov ? new THREE.Color(0xffffff) : pi.baseColor, 0.12)
-      mat.emissiveIntensity += ((hov ? 0.35 : 0.06) - mat.emissiveIntensity) * 0.1
+      const targetColor = hov ? new THREE.Color(0xffffff) : pi.baseColor
+      mat.color.lerp(targetColor, 0.12)
+      const targetEmissive = active ? 0.5 : (hov ? 0.35 : 0.06)
+      mat.emissiveIntensity += (targetEmissive - mat.emissiveIntensity) * 0.1
 
       // Goldilocks glow: gentle breathing animation
       if (pi.goldilocksGlow) {
@@ -385,6 +405,23 @@ export class SolarSystem {
         pi.rings[r].scale.setScalar(1 + phase * 2.5)
         const mat2 = pi.rings[r].material as THREE.MeshBasicMaterial
         mat2.opacity += ((1 - phase) * peak - mat2.opacity) * 0.3
+      }
+
+      // Orbit line: glow based on mouse proximity
+      const orbitLine = this.orbitLines[i]
+      if (orbitLine) {
+        const orbitMat = orbitLine.material as THREE.LineBasicMaterial
+        const proximity = orbitProximities[i] ?? 1  // 0 = on orbit, 1 = far
+        const baseOpacity = 0.18
+        const glowOpacity = 0.65
+        const targetOpacity = baseOpacity + (1 - proximity) * (glowOpacity - baseOpacity)
+        orbitMat.opacity += (targetOpacity - orbitMat.opacity) * 0.15
+
+        // Also brighten color when close
+        const baseColor = this.orbitBaseColors[i]
+        const glowColor = new THREE.Color(0xffffff)
+        const targetColor = baseColor.clone().lerp(glowColor, (1 - proximity) * 0.5)
+        orbitMat.color.lerp(targetColor, 0.15)
       }
     }
 
