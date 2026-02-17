@@ -406,20 +406,31 @@ export class SolarSystem {
         mat2.opacity += ((1 - phase) * peak - mat2.opacity) * 0.3
       }
 
-      // Orbit line: glow based on mouse proximity
+      // Orbit line: glow based on mouse proximity OR active track state
       const orbitLine = this.orbitLines[i]
       if (orbitLine) {
         const orbitMat = orbitLine.material as THREE.LineBasicMaterial
         const proximity = orbitProximities[i] ?? 1  // 0 = on orbit, 1 = far
+        const isActive = active  // track is playing for this planet
+
         const baseOpacity = 0.18
-        const glowOpacity = 0.65
-        const targetOpacity = baseOpacity + (1 - proximity) * (glowOpacity - baseOpacity)
+        const activeOpacity = 0.55   // steady glow when track is active
+        const hoverOpacity = 0.75    // brighter on hover
+
+        // Active orbits have a steady glow; hovering adds extra brightness
+        let targetOpacity = baseOpacity
+        if (isActive) {
+          targetOpacity = activeOpacity + (1 - proximity) * (hoverOpacity - activeOpacity)
+        } else {
+          targetOpacity = baseOpacity + (1 - proximity) * (hoverOpacity - baseOpacity)
+        }
         orbitMat.opacity += (targetOpacity - orbitMat.opacity) * 0.15
 
-        // Also brighten color when close
+        // Also brighten color when active or close
         const baseColor = this.orbitBaseColors[i]
         const glowColor = new THREE.Color(0xffffff)
-        const targetColor = baseColor.clone().lerp(glowColor, (1 - proximity) * 0.5)
+        const colorBlend = isActive ? Math.max(0.35, (1 - proximity) * 0.5) : (1 - proximity) * 0.5
+        const targetColor = baseColor.clone().lerp(glowColor, colorBlend)
         orbitMat.color.lerp(targetColor, 0.15)
       }
     }

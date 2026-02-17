@@ -1,7 +1,8 @@
 // Kick Track - four-on-the-floor foundation
 
 import * as Tone from 'tone'
-import type { Track } from './index'
+import type { Track, TrackParams } from './index'
+import { DEFAULT_TRACK_PARAMS } from './index'
 
 export class KickTrack implements Track {
   private synth: Tone.MembraneSynth
@@ -10,6 +11,7 @@ export class KickTrack implements Track {
   private muted = true
   private baseGain = 0.7
   private level = 1
+  private params: TrackParams = { ...DEFAULT_TRACK_PARAMS }
 
   constructor(output: Tone.InputNode) {
     this.gain = new Tone.Gain(0)
@@ -38,7 +40,11 @@ export class KickTrack implements Track {
     this.sequence = new Tone.Sequence(
       (time, hit) => {
         if (this.muted || !hit) return
-        this.synth.triggerAttackRelease('C1', '8n', time)
+        // Density affects whether note plays
+        if (Math.random() > this.params.density * 1.5 + 0.25) return
+        // Energy affects velocity
+        const velocity = 0.5 + this.params.energy * 0.5
+        this.synth.triggerAttackRelease('C1', '8n', time, velocity)
       },
       pattern,
       '16n'
@@ -64,6 +70,19 @@ export class KickTrack implements Track {
   setLevel(level: number) {
     this.level = Math.max(0, Math.min(1, level))
     this.updateGain()
+  }
+
+  setParams(params: Partial<TrackParams>) {
+    Object.assign(this.params, params)
+    // Energy affects decay
+    const decay = 0.15 + (1 - this.params.energy) * 0.3
+    this.synth.envelope.decay = decay
+    // Brightness affects octaves (pitch sweep range)
+    this.synth.octaves = 4 + this.params.brightness * 4
+  }
+
+  getParams(): TrackParams {
+    return { ...this.params }
   }
 
   private updateGain() {

@@ -2,15 +2,12 @@
 // Each planet is a musical layer that can be toggled on/off
 
 import * as Tone from 'tone'
-import { KickTrack, HiHatTrack, BassTrack, ArpTrack, PadTrack, PercTrack, LeadTrack, type Track } from './tracks/index'
+import { KickTrack, HiHatTrack, BassTrack, ArpTrack, PadTrack, PercTrack, LeadTrack, type Track, type TrackParams, DEFAULT_TRACK_PARAMS } from './tracks/index'
 import { SCALES, SCALE_NAMES } from './scales'
 
-export interface MusicParams {
-  energy: number
-  brightness: number
-  density: number
-  movement: number
-}
+// Re-export TrackParams for external use
+export type { TrackParams }
+export { DEFAULT_TRACK_PARAMS }
 
 // Track types that can be assigned to planets
 export type TrackType = 'kick' | 'hihat' | 'perc' | 'bass' | 'arp' | 'pad' | 'lead'
@@ -123,24 +120,27 @@ export class MusicEngine {
     const track = this.tracks.get(trackType)
     if (!track) return
 
-    // Unmute if level > 0, mute if level is 0
-    const shouldPlay = level > 0.01
-    if (shouldPlay && track.isMuted()) {
-      track.setMuted(false)
-    } else if (!shouldPlay && !track.isMuted()) {
-      track.setMuted(true)
-    }
-
+    // Only set volume - mute state is controlled by toggle
     track.setLevel(level)
   }
 
-  /** Update all planet levels from proximity array */
+  /** Update all planet levels from proximity array - only affects volume, not mute state */
   updatePlanetLevels(proximities: number[]) {
-    this.planetTracks.forEach((_, planetIdx) => {
+    this.planetTracks.forEach((trackType, planetIdx) => {
+      const track = this.tracks.get(trackType)
+      if (!track) return
+
       const proximity = proximities[planetIdx] ?? 1  // 0 = on orbit, 1 = far
-      // Invert: proximity 0 = full volume, proximity 1 = silent
-      const level = Math.max(0, 1 - proximity)
-      this.setPlanetLevel(planetIdx, level)
+      // When track is muted (off), keep level at 0
+      // When track is unmuted (on), level follows proximity
+      if (track.isMuted()) {
+        track.setLevel(0)
+      } else {
+        // Invert: proximity 0 = full volume, proximity 1 = lower volume (but not silent)
+        // Keep a minimum level of 0.3 so active tracks are always audible
+        const level = Math.max(0.3, 1 - proximity * 0.7)
+        track.setLevel(level)
+      }
     })
   }
 
@@ -209,7 +209,24 @@ export class MusicEngine {
     }
   }
 
-  /** Apply element preset */
+  /** Set a track's parameters (for dev menu) */
+  setTrackParams(trackType: TrackType, params: Partial<TrackParams>) {
+    const track = this.tracks.get(trackType)
+    if (track) {
+      track.setParams(params)
+    }
+  }
+
+  /** Get a track's parameters */
+  getTrackParams(trackType: TrackType): TrackParams {
+    const track = this.tracks.get(trackType)
+    if (track) {
+      return track.getParams()
+    }
+    return { ...DEFAULT_TRACK_PARAMS }
+  }
+
+  /** Apply element preset - returns preset values for UI sync */
   applyPreset(element: 'fire' | 'water' | 'earth' | 'air') {
     const presets = {
       fire:  { bpm: 135, scale: 'phrygian',        root: 48, swing: 0.1 },
@@ -221,6 +238,17 @@ export class MusicEngine {
     this.setBPM(p.bpm)
     this.setSwing(p.swing)
     this.setScale(SCALES[p.scale], p.root)
+    return p
+  }
+
+  /** Get current BPM */
+  getBPM(): number {
+    return Tone.getTransport().bpm.value
+  }
+
+  /** Get current swing */
+  getSwing(): number {
+    return Tone.getTransport().swing
   }
 
   isPlaying() {

@@ -206,8 +206,15 @@ const devMenu = new DevMenu({
   onTrackLevel: (track, level) => {
     musicEngine?.setTrackLevel(track as any, level)
   },
+  onTrackParamsChange: (track, params) => {
+    musicEngine?.setTrackParams(track as any, params)
+  },
+  onTrackSelect: (track) => {
+    return musicEngine?.getTrackParams(track as any)
+  },
   onPreset: (preset) => {
-    musicEngine?.applyPreset(preset)
+    const result = musicEngine?.applyPreset(preset)
+    return result
   },
 })
 
@@ -532,6 +539,7 @@ let planetView: PlanetView | null = null
 let lifeView: LifeView | null = null
 let narrativeEngine: NarrativeEngine | null = null
 let currentHoveredPlanetIdx = -1
+let currentHoveredOrbitIdx = -1  // closest orbit for click detection
 let stickyPlanetIdx = -1       // last hovered planet — persists for a few seconds
 let stickyPlanetExpiry = 0     // animTime when sticky bubble should hide
 let solarCamAngle = 0  // kept for compat; replaced by theta/phi
@@ -1144,10 +1152,21 @@ document.addEventListener('mouseup', (e) => {
     if (Math.abs(dx) < 4 && Math.abs(dy) < 4 && hoveredSystem) startZoomIn(hoveredSystem)
   } else if (state === 'solar-system') {
     if (activeCorner >= 0) goBack()
-    else if (Math.abs(dx) < 4 && Math.abs(dy) < 4 && currentHoveredPlanetIdx >= 0) {
-      // Toggle this planet's music track
-      const engine = getMusicEngine()
-      engine.togglePlanet(currentHoveredPlanetIdx)
+    else if (Math.abs(dx) < 4 && Math.abs(dy) < 4) {
+      // Click detection: planet = zoom in, orbit = toggle music
+      if (currentHoveredPlanetIdx >= 0) {
+        // Click on planet: enter planet view
+        enterPlanet(currentHoveredPlanetIdx)
+      } else if (currentHoveredOrbitIdx >= 0) {
+        // Click on orbit: toggle music track
+        const engine = getMusicEngine()
+        const isNowPlaying = engine.togglePlanet(currentHoveredOrbitIdx)
+        // Sync dev menu with track state
+        const trackType = engine.getPlanetTrack(currentHoveredOrbitIdx)
+        if (trackType) {
+          devMenu.setTrackState(trackType, isNowPlaying)
+        }
+      }
     }
   }
 })
@@ -1314,11 +1333,14 @@ function animate(t: number) {
   } else if (state === 'solar-system') {
     raycaster.setFromCamera(mouse, camera)
 
-    const starHovered = solarSystem ? raycaster.intersectObject(solarSystem.star).length > 0 : false
+    // Skip hover detection if mouse is over the dev menu
+    const menuBlocking = devMenu.isMouseOver()
+
+    const starHovered = !menuBlocking && solarSystem ? raycaster.intersectObject(solarSystem.star).length > 0 : false
 
     // Planet hover — check all planet meshes
     let hoveredPlanetIdx = -1
-    if (solarSystem && !starHovered) {
+    if (solarSystem && !starHovered && !menuBlocking) {
       const meshes = solarSystem.planetInfos.map(p => p.mesh)
       const hits = raycaster.intersectObjects(meshes)
       if (hits.length > 0) hoveredPlanetIdx = meshes.indexOf(hits[0].object as THREE.Mesh)
@@ -1327,7 +1349,8 @@ function animate(t: number) {
 
     // Orbit proximity detection: raycast onto the orbital plane
     let orbitProximities: number[] = []
-    if (solarSystem) {
+    currentHoveredOrbitIdx = -1
+    if (solarSystem && !menuBlocking) {
       // Account for the solar system's tilt when intersecting the plane
       const tiltedNormal = new THREE.Vector3(0, 1, 0).applyEuler(solarSystem.group.rotation)
       const tiltedPlane = new THREE.Plane(tiltedNormal, 0)
@@ -1336,6 +1359,16 @@ function animate(t: number) {
         // Get distance from star center (accounting for group position)
         const distFromCenter = orbitHitPoint.length()
         orbitProximities = solarSystem.getOrbitProximities(distFromCenter, 0.5)
+
+        // Find the closest orbit for click detection (threshold 0.3 = clickable range)
+        const clickThreshold = 0.3
+        let minProx = 1
+        for (let i = 0; i < orbitProximities.length; i++) {
+          if (orbitProximities[i] < minProx && orbitProximities[i] < clickThreshold) {
+            minProx = orbitProximities[i]
+            currentHoveredOrbitIdx = i
+          }
+        }
 
         // Update music levels based on proximity
         getMusicEngine().updatePlanetLevels(orbitProximities)
@@ -1405,7 +1438,7 @@ function animate(t: number) {
       if (corner >= 0) { cornerEls[corner].style.display = 'block'; requestAnimationFrame(() => { cornerEls[corner].style.color = 'rgba(255,255,255,0.55)' }) }
     }
 
-    renderer.domElement.style.cursor = corner >= 0 ? 'pointer' : (starHovered || hoveredPlanetIdx >= 0) ? 'pointer' : (isDragging ? 'grabbing' : 'grab')
+    renderer.domElement.style.cursor = menuBlocking ? 'default' : corner >= 0 ? 'pointer' : (starHovered || hoveredPlanetIdx >= 0 || currentHoveredOrbitIdx >= 0) ? 'pointer' : (isDragging ? 'grabbing' : 'grab')
     const activePlanets = musicEngine?.getActivePlanets() ?? []
     solarSystem?.update(dt, starHovered, hoveredPlanetIdx, activePlanets, orbitProximities)
 

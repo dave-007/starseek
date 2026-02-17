@@ -1,7 +1,8 @@
 // Percussion Track - snare/clap on 2 and 4
 
 import * as Tone from 'tone'
-import type { Track } from './index'
+import type { Track, TrackParams } from './index'
+import { DEFAULT_TRACK_PARAMS } from './index'
 
 export class PercTrack implements Track {
   private noise: Tone.NoiseSynth
@@ -11,6 +12,7 @@ export class PercTrack implements Track {
   private muted = true
   private baseGain = 0.4
   private level = 1
+  private params: TrackParams = { ...DEFAULT_TRACK_PARAMS }
 
   constructor(output: Tone.InputNode) {
     this.gain = new Tone.Gain(0)
@@ -43,6 +45,8 @@ export class PercTrack implements Track {
     this.sequence = new Tone.Sequence(
       (time, hit) => {
         if (this.muted || !hit) return
+        // Density affects whether note plays
+        if (Math.random() > this.params.density * 1.5 + 0.25) return
         this.noise.triggerAttackRelease('16n', time)
       },
       pattern,
@@ -69,6 +73,19 @@ export class PercTrack implements Track {
   setLevel(level: number) {
     this.level = Math.max(0, Math.min(1, level))
     this.updateGain()
+  }
+
+  setParams(params: Partial<TrackParams>) {
+    Object.assign(this.params, params)
+    // Energy affects decay
+    const decay = 0.08 + (1 - this.params.energy) * 0.15
+    this.noise.envelope.decay = decay
+    // Brightness affects filter
+    this.filter.frequency.linearRampTo(2000 + this.params.brightness * 8000, 0.1)
+  }
+
+  getParams(): TrackParams {
+    return { ...this.params }
   }
 
   private updateGain() {
