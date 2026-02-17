@@ -134,8 +134,19 @@ function getMusicEngine(): MusicEngine {
 // Dev menu for tuning music (press ` to toggle)
 const devMenu = new DevMenu({
   onBPMChange: (bpm) => musicEngine?.setBPM(bpm),
+  onSwingChange: (swing) => musicEngine?.setSwing(swing),
   onPlay: async () => { await getMusicEngine().start() },
   onStop: () => musicEngine?.stop(),
+  onMasterVolume: (vol) => musicEngine?.setMasterVolume(vol),
+  onTrackToggle: (track, enabled) => {
+    musicEngine?.setTrackMuted(track as any, !enabled)
+  },
+  onTrackLevel: (track, level) => {
+    musicEngine?.setTrackLevel(track as any, level)
+  },
+  onPreset: (preset) => {
+    musicEngine?.applyPreset(preset)
+  },
 })
 
 // ---------------------------------------------------------------------------

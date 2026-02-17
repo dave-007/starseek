@@ -182,6 +182,47 @@ export class MusicEngine {
     Tone.getTransport().bpm.value = bpm
   }
 
+  /** Set swing amount (0-0.5) */
+  setSwing(swing: number) {
+    Tone.getTransport().swing = swing
+    Tone.getTransport().swingSubdivision = '16n'
+  }
+
+  /** Set master volume (0-1) */
+  setMasterVolume(volume: number) {
+    this.master.gain.linearRampTo(volume, 0.1)
+  }
+
+  /** Directly set a track's muted state (for dev menu) */
+  setTrackMuted(trackType: TrackType, muted: boolean) {
+    const track = this.tracks.get(trackType)
+    if (track) {
+      track.setMuted(muted)
+    }
+  }
+
+  /** Directly set a track's level (for dev menu) */
+  setTrackLevel(trackType: TrackType, level: number) {
+    const track = this.tracks.get(trackType)
+    if (track) {
+      track.setLevel(level)
+    }
+  }
+
+  /** Apply element preset */
+  applyPreset(element: 'fire' | 'water' | 'earth' | 'air') {
+    const presets = {
+      fire:  { bpm: 135, scale: 'phrygian',        root: 48, swing: 0.1 },
+      water: { bpm: 95,  scale: 'pentatonicMinor', root: 41, swing: 0.25 },
+      earth: { bpm: 105, scale: 'pentatonicMinor', root: 36, swing: 0.15 },
+      air:   { bpm: 125, scale: 'pentatonicMajor', root: 53, swing: 0.05 },
+    }
+    const p = presets[element]
+    this.setBPM(p.bpm)
+    this.setSwing(p.swing)
+    this.setScale(SCALES[p.scale], p.root)
+  }
+
   isPlaying() {
     return this.playing
   }
