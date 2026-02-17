@@ -831,14 +831,23 @@ function animate(t: number) {
 
     // Update status bar
     if (planetView) {
-      const score = planetView.matchScore
-      const pct   = Math.round(planetView.litFraction * 100)
-      const bars  = Math.round(score * 10)
-      const resonBar = '█'.repeat(bars) + '░'.repeat(10 - bars)
-      const scoreColor = score > 0.65 ? '#44ff88' : score > 0.35 ? '#ffdd44' : '#ff4422'
+      const pct    = Math.round(planetView.litFraction * 100)
+      const att    = planetView.zoneAttunement
+      const bars   = Math.round(att * 10)
+      const resonBar   = '█'.repeat(bars) + '░'.repeat(10 - bars)
+      const attColor   = att > 0.65 ? '#44ff88' : att > 0.35 ? '#ffdd44' : '#ff4422'
+      // Zone breakdown: small colored squares per zone
+      const zoneIcons  = planetView.zones.map(z => {
+        const ec = ELEMENT_COLORS[z.element]
+        const col = '#' + ec.getHexString()
+        const fill = Math.round(z.score * 4)
+        const icon = ['○','◔','◑','◕','●'][fill]
+        return `<span style="color:${col}">${icon}</span>`
+      }).join(' ')
       planetStatus.innerHTML =
+        `${zoneIcons}&nbsp;&nbsp;` +
         `coverage <span style="color:#aaa">${pct}%</span>&nbsp;&nbsp;` +
-        `attunement <span style="color:${scoreColor}">${resonBar}</span>`
+        `attunement <span style="color:${attColor}">${resonBar}</span>`
 
       updateElementUI()
 

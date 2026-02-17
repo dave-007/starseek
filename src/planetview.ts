@@ -54,6 +54,14 @@ interface CellState {
   element:  ElementKey | null
 }
 
+/** A resonance zone: cluster of cells wanting a specific element */
+export interface ResonanceZone {
+  cells:   number[]
+  element: ElementKey
+  /** 0–1: fraction of zone cells correctly painted */
+  score:   number
+}
+
 export type PlanetOutcome = 'playing' | 'won' | 'lost'
 
 export class PlanetView {
@@ -75,9 +83,14 @@ export class PlanetView {
   private flashPhase = 0
   private flashColor = new THREE.Color()
 
-  private _outcome:     PlanetOutcome = 'playing'
-  private _litFraction  = 0
-  private timePlaying   = 0
+  private _outcome:       PlanetOutcome = 'playing'
+  private _litFraction    = 0
+  private timePlaying     = 0
+  private lifeTime        = 0       // counts up after winning for life animation
+
+  /** Resonance zones — visible to main.ts for HUD */
+  readonly zones: ResonanceZone[] = []
+  private cellZone: Int16Array     // zone index per cell, -1 = no zone
 
   constructor(seed: number, color: THREE.Color) {
     this.color = color.clone()
@@ -99,16 +112,54 @@ export class PlanetView {
     // Start dark and paused
     this.cells    = Array.from({ length: this.cellCount }, () => ({ phase: 0, queued: false, element: null }))
     this.frontier = []
+    this.cellZone = new Int16Array(this.cellCount).fill(-1)
 
+    // ── Generate resonance zones ──────────────────────────────────────────────
+    // Zones are blobs / polar caps / equatorial bands — visible as faint hints
+    const zrand   = makePRNG(seed ^ 0x1234abcd)
+    const zoneCount = 4 + Math.floor(zrand() * 3)   // 4–6 zones
+
+    // Zone shapes: pick a center cell, BFS-expand to N cells
+    const ZONE_SIZE = Math.floor(this.cellCount / (zoneCount * 2.2))
+    for (let z = 0; z < zoneCount; z++) {
+      const centerCell = Math.floor(zrand() * this.cellCount)
+      const el: ElementKey = KEYS[Math.floor(zrand() * 4)]
+      const visited  = new Set<number>([centerCell])
+      const frontier = [centerCell]
+      while (visited.size < ZONE_SIZE && frontier.length) {
+        const ci = frontier.splice(Math.floor(zrand() * frontier.length), 1)[0]
+        for (const ni of this.adj[ci]) {
+          if (!visited.has(ni) && this.cellZone[ni] === -1) {
+            visited.add(ni); this.cellZone[ni] = z; frontier.push(ni)
+          }
+        }
+        this.cellZone[ci] = z
+      }
+      this.zones.push({ cells: [...visited], element: el, score: 0 })
+    }
+
+    // Paint initial cell colors: zone cells show faint hint, others very dark
     const { r, g, b } = color
-    for (let i = 0; i < this.cellCount; i++) surface.setCell(i, r * 0.03, g * 0.03, b * 0.03)
+    for (let i = 0; i < this.cellCount; i++) {
+      const zi = this.cellZone[i]
+      if (zi >= 0) {
+        const ec = ELEMENT_COLORS[this.zones[zi].element]
+        surface.setCell(i, ec.r * 0.07, ec.g * 0.07, ec.b * 0.07)
+      } else {
+        surface.setCell(i, r * 0.03, g * 0.03, b * 0.03)
+      }
+    }
     surface.flush()
 
     this.group.add(new THREE.AmbientLight(0x111133, 1))
   }
 
-  get outcome():     PlanetOutcome { return this._outcome }
-  get litFraction(): number        { return this._litFraction }
+  get outcome():        PlanetOutcome { return this._outcome }
+  get litFraction():    number        { return this._litFraction }
+  get zoneAttunement(): number {
+    if (!this.zones.length) return 0
+    return this.zones.reduce((s, z) => s + z.score, 0) / this.zones.length
+  }
 
   /** Element mix computed from what's actually painted on the planet */
   get currentMix(): ElementMix {
@@ -178,9 +229,22 @@ export class PlanetView {
       this.frontier.push(si)
     }
 
+    // Reset zone scores
+    for (const z of this.zones) z.score = 0
+
+    // Repaint with zone hints visible
     const { r, g, b } = this.color
-    for (let i = 0; i < this.cellCount; i++) this.setCell(i, r * 0.03, g * 0.03, b * 0.03)
+    for (let i = 0; i < this.cellCount; i++) {
+      const zi = this.cellZone[i]
+      if (zi >= 0) {
+        const ec = ELEMENT_COLORS[this.zones[zi].element]
+        this.setCell(i, ec.r * 0.07, ec.g * 0.07, ec.b * 0.07)
+      } else {
+        this.setCell(i, r * 0.03, g * 0.03, b * 0.03)
+      }
+    }
     this.flush()
+    this.lifeTime = 0
     this.paused = false
   }
 
@@ -200,21 +264,58 @@ export class PlanetView {
       return
     }
 
+    // Life emergence animation after winning
+    if (this._outcome === 'won') {
+      this.lifeTime += dt
+      const lt = this.lifeTime
+      const { r: pr, g: pg, b: pb } = this.color
+      for (let i = 0; i < this.cellCount; i++) {
+        const t = this.cells[i].phase
+        if (t <= 0) continue
+        // Wave of green life spreading from top
+        const cent = this.cellCentroids[i]
+        const wave = Math.max(0, Math.min(1, (lt * 0.6 - (1 - cent.y) * 0.5)))
+        const pulse = 0.8 + Math.sin(lt * 3.0 + i * 0.04) * 0.2
+        const el = this.cells[i].element ?? 'earth'
+        const ec = ELEMENT_COLORS[el]
+        // Blend toward organic green
+        this.setCell(i,
+          (ec.r * (1 - wave) + 0.1 * wave) * pulse * t,
+          (ec.g * (1 - wave) + 0.75 * wave) * pulse * t,
+          (ec.b * (1 - wave) + 0.2 * wave) * pulse * t,
+        )
+      }
+      this.flush()
+      return
+    }
+
     if (this.paused || this._outcome !== 'playing') return
     this.timePlaying += dt
 
     const { r: pr, g: pg, b: pb } = this.color
 
-    // Recolor ALL active cells every frame — immediately reflects current state
+    // Recolor ALL cells every frame — unlit zone cells keep their faint hint
     for (let i = 0; i < this.cellCount; i++) {
       const c = this.cells[i]
-      if (c.phase <= 0) continue
+      if (c.phase <= 0) {
+        // Keep zone hint visible on unlit cells (pulse gently)
+        const zi = this.cellZone[i]
+        if (zi >= 0) {
+          const ec = ELEMENT_COLORS[this.zones[zi].element]
+          const pulse = 0.055 + Math.sin(this.timePlaying * 1.8 + i * 0.05) * 0.018
+          this.setCell(i, ec.r * pulse, ec.g * pulse, ec.b * pulse)
+        }
+        continue
+      }
       const el = c.element ?? 'earth'
       const ec = ELEMENT_COLORS[el]
-      // Blend element color with planet base color
       const t  = c.phase
-      const blend = 0.4 + t * 0.5        // element color dominates as cell fills
-      const brightness = t * (0.7 + t * 0.3)
+      // Check if painted element matches zone
+      const zi = this.cellZone[i]
+      const correct = zi >= 0 && this.zones[zi].element === el
+      const resonanceBoost = correct ? 1.25 : 0.85
+      const blend = 0.4 + t * 0.5
+      const brightness = t * (0.7 + t * 0.3) * resonanceBoost
       this.setCell(i,
         (pr * (1 - blend) + ec.r * blend) * brightness,
         (pg * (1 - blend) + ec.g * blend) * brightness,
@@ -263,12 +364,24 @@ export class PlanetView {
     this.frontier = nextFrontier
     this.flush()
 
-    // Lit fraction & outcome
+    // Zone scores + lit fraction + outcome
     let litCount = 0
     for (let i = 0; i < this.cellCount; i++) if (this.cells[i].phase > 0.5) litCount++
     this._litFraction = litCount / this.cellCount
 
-    if (this._litFraction >= 0.82) this._outcome = 'won'
+    let totalZoneScore = 0
+    for (const zone of this.zones) {
+      let correct = 0
+      for (const ci of zone.cells) {
+        if (this.cells[ci].phase > 0.5 && this.cells[ci].element === zone.element) correct++
+      }
+      zone.score = zone.cells.length > 0 ? correct / zone.cells.length : 0
+      totalZoneScore += zone.score
+    }
+    const zoneAttunement = this.zones.length > 0 ? totalZoneScore / this.zones.length : 0
+
+    // Win: covered enough AND zones mostly correct
+    if (this._litFraction >= 0.72 && zoneAttunement >= 0.68) this._outcome = 'won'
     else if (this.frontier.length === 0 && this._litFraction < 0.22 && this.timePlaying > 5) this._outcome = 'lost'
   }
 

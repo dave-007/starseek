@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { generateLifeStory } from './stories'
 
+const _tempAxis = new THREE.Vector3()
+
 function makePRNG(seed: number) {
   let s = ((seed ^ 0xdeadbeef) >>> 0) || 1
   return () => { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return (s >>> 0) / 0xffffffff }
@@ -75,6 +77,21 @@ export class SolarSystem {
   private orbitRadii:  number[] = []
   private orbitSpeeds: number[] = []
   private moonData:    { mesh: THREE.Mesh; dist: number; speed: number; angle: number }[][] = []
+
+  // Asteroid belts — InstancedMesh with per-asteroid tumble data
+  private belts: {
+    mesh:     THREE.InstancedMesh
+    count:    number
+    angles:   Float32Array   // orbital angle
+    radii:    Float32Array   // orbital radius
+    speeds:   Float32Array   // orbital speed
+    yOffsets: Float32Array
+    rotAxes:  Float32Array   // xyz packed, 3 per asteroid
+    rotAngles:Float32Array   // current self-rotation
+    rotSpeeds:Float32Array
+    scaleXZ:  Float32Array   // elongation on x/z per asteroid
+  }[] = []
+  private _beltDummy = new THREE.Object3D()
 
   constructor(seed: number, systemColor: THREE.Color, pulseSpeed: number) {
     // rand  → structure: star size, orbit radii, count
@@ -229,21 +246,84 @@ export class SolarSystem {
       this.moonData.push(moons)
     }
 
-    // Asteroid belt
-    const rand3 = makePRNG(seed + 7)
-    if (count >= 3 && rand3() > 0.5) {
-      const bi  = 1 + Math.floor(rand3() * (count - 2))
-      const br  = this.orbitRadii[bi] + 0.15
-      const n   = 300 + Math.floor(rand3() * 200)
-      const pos = new Float32Array(n * 3)
+    // ── Asteroid belts ────────────────────────────────────────────────────────
+    const rand3    = makePRNG(seed + 7)
+    const beltCount = count >= 4 ? 1 + Math.floor(rand3() * 3) : count >= 2 ? 1 + Math.floor(rand3() * 2) : 0
+
+    // Belt types: rocky / icy / metallic
+    const BELT_COLORS = [
+      [new THREE.Color(0x887755), new THREE.Color(0xaa9966), new THREE.Color(0x665544)], // rocky
+      [new THREE.Color(0x99bbcc), new THREE.Color(0xaaccdd), new THREE.Color(0x7799aa)], // icy
+      [new THREE.Color(0xaaaaaa), new THREE.Color(0xccccbb), new THREE.Color(0x888877)], // metallic
+    ]
+
+    // Rocky geometry variants: detail-0 icosahedron, octahedron, dodecahedron
+    const BELT_GEOS = [
+      new THREE.IcosahedronGeometry(1, 0),
+      new THREE.OctahedronGeometry(1, 0),
+      new THREE.DodecahedronGeometry(1, 0),
+    ]
+
+    const usedBeltSlots = new Set<number>()
+    for (let b = 0; b < beltCount; b++) {
+      // Pick a gap between planets not already used
+      let slot = 1 + Math.floor(rand3() * Math.max(1, count - 1))
+      let tries = 0
+      while (usedBeltSlots.has(slot) && tries++ < 8) slot = 1 + Math.floor(rand3() * Math.max(1, count - 1))
+      usedBeltSlots.add(slot)
+
+      const beltR   = (this.orbitRadii[slot - 1] ?? 1.0) * 0.5 + (this.orbitRadii[slot] ?? this.orbitRadii[slot - 1] + 1.0) * 0.5
+      const spread  = 0.25 + rand3() * 0.35
+      const n       = 55 + Math.floor(rand3() * 75)
+      const bType   = Math.floor(rand3() * 3)
+      const geoIdx  = Math.floor(rand3() * 3)
+      const geo     = BELT_GEOS[geoIdx]
+      const colors  = BELT_COLORS[bType]
+
+      const mat = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: bType === 2 ? 0.6 : 0.05 })
+      const instMesh = new THREE.InstancedMesh(geo, mat, n)
+      instMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+      instMesh.castShadow = false
+
+      const angles    = new Float32Array(n)
+      const radii     = new Float32Array(n)
+      const speeds    = new Float32Array(n)
+      const yOffsets  = new Float32Array(n)
+      const rotAxes   = new Float32Array(n * 3)
+      const rotAngles = new Float32Array(n)
+      const rotSpeeds = new Float32Array(n)
+      const scaleXZ   = new Float32Array(n * 2)
+
+      const colBuf = new THREE.Color()
       for (let k = 0; k < n; k++) {
-        const a = rand3() * Math.PI * 2; const rv = br + (rand3() - 0.5) * 0.35
-        pos[k*3] = Math.cos(a)*rv; pos[k*3+1] = (rand3()-0.5)*0.06; pos[k*3+2] = Math.sin(a)*rv
+        angles[k]    = rand3() * Math.PI * 2
+        radii[k]     = beltR + (rand3() - 0.5) * spread
+        speeds[k]    = 0.06 / Math.sqrt(beltR) * (0.7 + rand3() * 0.6)
+        yOffsets[k]  = (rand3() - 0.5) * 0.12
+        rotAxes[k*3]     = rand3() - 0.5
+        rotAxes[k*3 + 1] = rand3() - 0.5
+        rotAxes[k*3 + 2] = rand3() - 0.5
+        // Normalise rotation axis
+        const al = Math.sqrt(rotAxes[k*3]**2 + rotAxes[k*3+1]**2 + rotAxes[k*3+2]**2) || 1
+        rotAxes[k*3] /= al; rotAxes[k*3+1] /= al; rotAxes[k*3+2] /= al
+        rotAngles[k] = rand3() * Math.PI * 2
+        rotSpeeds[k] = 0.4 + rand3() * 1.8
+        scaleXZ[k*2]     = 0.55 + rand3() * 0.7   // irregular x
+        scaleXZ[k*2 + 1] = 0.55 + rand3() * 0.7   // irregular z
+
+        // Random tint from palette
+        const ci = Math.floor(rand3() * colors.length)
+        colBuf.copy(colors[ci]).offsetHSL(0, 0, (rand3() - 0.5) * 0.12)
+        instMesh.setColorAt(k, colBuf)
       }
-      const bg = new THREE.BufferGeometry()
-      bg.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-      this.group.add(new THREE.Points(bg, new THREE.PointsMaterial({ color: 0x887755, size: 0.012 })))
+      if (instMesh.instanceColor) instMesh.instanceColor.needsUpdate = true
+
+      this.group.add(instMesh)
+      this.belts.push({ mesh: instMesh, count: n, angles, radii, speeds, yOffsets, rotAxes, rotAngles, rotSpeeds, scaleXZ })
     }
+
+    // Dispose shared belt geometries
+    for (const g of BELT_GEOS) g.dispose()
 
     this.group.rotation.x = 0.28
   }
@@ -306,6 +386,29 @@ export class SolarSystem {
         const mat2 = pi.rings[r].material as THREE.MeshBasicMaterial
         mat2.opacity += ((1 - phase) * peak - mat2.opacity) * 0.3
       }
+    }
+
+    // ── Asteroid belt tumble update ───────────────────────────────────────────
+    const d = this._beltDummy
+    for (const belt of this.belts) {
+      for (let k = 0; k < belt.count; k++) {
+        belt.angles[k]    += belt.speeds[k] * dt
+        belt.rotAngles[k] += belt.rotSpeeds[k] * dt
+
+        d.position.set(
+          Math.cos(belt.angles[k]) * belt.radii[k],
+          belt.yOffsets[k],
+          Math.sin(belt.angles[k]) * belt.radii[k]
+        )
+        const ax = belt.rotAxes[k*3], ay = belt.rotAxes[k*3+1], az = belt.rotAxes[k*3+2]
+        _tempAxis.set(ax, ay, az)
+        d.quaternion.setFromAxisAngle(_tempAxis, belt.rotAngles[k])
+        const size = 0.022 + (belt.radii[k] % 0.07) * 0.3   // vary by index for spread
+        d.scale.set(size * belt.scaleXZ[k*2], size * (0.55 + (k % 7) * 0.07), size * belt.scaleXZ[k*2+1])
+        d.updateMatrix()
+        belt.mesh.setMatrixAt(k, d.matrix)
+      }
+      belt.mesh.instanceMatrix.needsUpdate = true
     }
   }
 
