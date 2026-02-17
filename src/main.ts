@@ -23,7 +23,9 @@ camera.position.set(0, 0, 3)
 
 const renderer = new THREE.WebGLRenderer({ antialias: true })
 renderer.setSize(window.innerWidth, window.innerHeight)
-renderer.setPixelRatio(window.devicePixelRatio)
+// Cap pixel ratio to 2 for performance on high-DPI displays
+const targetPixelRatio = Math.min(window.devicePixelRatio, 2)
+renderer.setPixelRatio(targetPixelRatio)
 document.body.appendChild(renderer.domElement)
 
 window.addEventListener('resize', () => {
@@ -31,6 +33,36 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix()
   renderer.setSize(window.innerWidth, window.innerHeight)
 })
+
+// ---------------------------------------------------------------------------
+// Touch Support for Mobile Devices
+// ---------------------------------------------------------------------------
+const simulateMouseEvent = (touchEvent: TouchEvent, mouseType: string) => {
+  const touch = touchEvent.touches[0] || touchEvent.changedTouches[0]
+  if (!touch) return
+  
+  const mouseEvent = new MouseEvent(mouseType, {
+    clientX: touch.clientX,
+    clientY: touch.clientY,
+    bubbles: true,
+    cancelable: true
+  })
+  
+  if (mouseType === 'mousedown' || mouseType === 'mousemove') {
+    renderer.domElement.dispatchEvent(mouseEvent)
+  } else {
+    document.dispatchEvent(mouseEvent)
+  }
+  touchEvent.preventDefault()
+}
+
+renderer.domElement.addEventListener('touchstart', (e) => simulateMouseEvent(e, 'mousedown'), { passive: false })
+renderer.domElement.addEventListener('touchmove', (e) => simulateMouseEvent(e, 'mousemove'), { passive: false })
+renderer.domElement.addEventListener('touchend', (e) => {
+  const mouseEvent = new MouseEvent('mouseup', { bubbles: true })
+  document.dispatchEvent(mouseEvent)
+  e.preventDefault()
+}, { passive: false })
 
 // ---------------------------------------------------------------------------
 // Galaxy objects
@@ -1128,7 +1160,15 @@ function animate(t: number) {
         thoughtBubble.style.opacity = String(bubbleAlpha)
         thoughtBubble.style.left = `${sx + 18}px`
         thoughtBubble.style.top  = `${sy - 80}px`
-        thoughtBubble.innerHTML  = `<div style="color:#44ffaa;margin-bottom:6px;font-size:10px;letter-spacing:.14em;">✦ ${pi.label.toUpperCase()}</div>${pi.lifeStory}`
+        // Safe DOM manipulation to prevent XSS
+        thoughtBubble.textContent = ''
+        const titleDiv = document.createElement('div')
+        titleDiv.style.cssText = 'color:#44ffaa;margin-bottom:6px;font-size:10px;letter-spacing:.14em;'
+        titleDiv.textContent = `✦ ${pi.label.toUpperCase()}`
+        const storyDiv = document.createElement('div')
+        storyDiv.textContent = pi.lifeStory
+        thoughtBubble.appendChild(titleDiv)
+        thoughtBubble.appendChild(storyDiv)
       } else {
         thoughtBubble.style.display = 'none'
         label.style.display = 'block'
@@ -1226,17 +1266,34 @@ function animate(t: number) {
       const resonBar   = '█'.repeat(bars) + '░'.repeat(10 - bars)
       const attColor   = att > 0.65 ? '#44ff88' : att > 0.35 ? '#ffdd44' : '#ff4422'
       // Zone breakdown: small colored squares per zone
-      const zoneIcons  = planetView.zones.map(z => {
+      const zoneSpans: HTMLSpanElement[]  = planetView.zones.map(z => {
         const ec = ELEMENT_COLORS[z.element]
         const col = '#' + ec.getHexString()
         const fill = Math.round(z.score * 4)
         const icon = ['○','◔','◑','◕','●'][fill]
-        return `<span style="color:${col}">${icon}</span>`
-      }).join(' ')
-      planetStatus.innerHTML =
-        `${zoneIcons}&nbsp;&nbsp;` +
-        `coverage <span style="color:#aaa">${pct}%</span>&nbsp;&nbsp;` +
-        `attunement <span style="color:${attColor}">${resonBar}</span>`
+        const span = document.createElement('span')
+        span.style.color = col
+        span.textContent = icon
+        return span
+      })
+      // Safe DOM manipulation to prevent XSS
+      planetStatus.textContent = ''
+      zoneSpans.forEach((span: HTMLSpanElement, i: number) => {
+        planetStatus.appendChild(span)
+        if (i < zoneSpans.length - 1) {
+          planetStatus.appendChild(document.createTextNode(' '))
+        }
+      })
+      planetStatus.appendChild(document.createTextNode('  coverage '))
+      const pctSpan = document.createElement('span')
+      pctSpan.style.color = '#aaa'
+      pctSpan.textContent = `${pct}%`
+      planetStatus.appendChild(pctSpan)
+      planetStatus.appendChild(document.createTextNode('  attunement '))
+      const attSpan = document.createElement('span')
+      attSpan.style.color = attColor
+      attSpan.textContent = resonBar
+      planetStatus.appendChild(attSpan)
 
       updateElementUI()
 

@@ -87,11 +87,21 @@ export function unlockAudio() {
   // Build a simple algorithmic reverb
   const sampleRate = sharedCtx.sampleRate
   const len = sampleRate * 3
-  const impulse = sharedCtx.createBuffer(2, len, sampleRate)
+  
+  // Validate buffer size to prevent memory issues
+  const MAX_BUFFER_SIZE = sampleRate * 10 // 10 seconds max
+  const validLen = Math.min(len, MAX_BUFFER_SIZE)
+  
+  if (validLen <= 0 || validLen > MAX_BUFFER_SIZE) {
+    console.warn('Invalid audio buffer size, using default')
+    return
+  }
+  
+  const impulse = sharedCtx.createBuffer(2, validLen, sampleRate)
   for (let ch = 0; ch < 2; ch++) {
     const d = impulse.getChannelData(ch)
-    for (let i = 0; i < len; i++) {
-      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.2)
+    for (let i = 0; i < validLen; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / validLen, 2.2)
     }
   }
   sharedReverb = sharedCtx.createConvolver()
