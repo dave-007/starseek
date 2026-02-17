@@ -4,6 +4,8 @@ import { unlockAudio, SystemLoop } from './audio'
 import { buildHexSphere } from './hexsphere'
 import { SolarSystem } from './solarsystem'
 import { PlanetView, ElementKey, SEED_EVENTS, SeedEvent, ELEMENT_COLORS, ELEMENT_EMOJI } from './planetview'
+import { LifeView, type LifeSimEvent } from './lifeview'
+import { NarrativeEngine, type NarrativeMood } from './narrative'
 import {
   type Phenomenon, type PhenomenonKey,
   createRadio, createUFO, createComet, createCityLights, createFormation, createAnomaly,
@@ -13,6 +15,8 @@ import {
   createMessierObjects, createRandomOddnessStub,
   createDarkMatter, createBeacon, createLens, createNursery,
 } from './phenomena'
+import { MusicEngine } from './audio/index'
+import { DevMenu } from './devmenu'
 
 // ---------------------------------------------------------------------------
 // Renderer & Scene
@@ -175,6 +179,37 @@ for (let i = 0; i < systemCount; i++) {
   const audioSeed = Math.round((localPos.x + localPos.y + localPos.z + 3) * 1e6)
   systems.push({ id: i, localPos, dot, color, rings, pulseSpeed, maxScale, audio: new SystemLoop(audioSeed), audioSeed })
 }
+
+// ---------------------------------------------------------------------------
+// Music Engine
+// ---------------------------------------------------------------------------
+// Lazy initialization to avoid Tone.js blocking page load
+let musicEngine: MusicEngine | null = null
+
+function getMusicEngine(): MusicEngine {
+  if (!musicEngine) {
+    musicEngine = new MusicEngine()
+  }
+  return musicEngine
+}
+
+// Dev menu for tuning music (press ` to toggle)
+const devMenu = new DevMenu({
+  onBPMChange: (bpm) => musicEngine?.setBPM(bpm),
+  onSwingChange: (swing) => musicEngine?.setSwing(swing),
+  onPlay: async () => { await getMusicEngine().start() },
+  onStop: () => musicEngine?.stop(),
+  onMasterVolume: (vol) => musicEngine?.setMasterVolume(vol),
+  onTrackToggle: (track, enabled) => {
+    musicEngine?.setTrackMuted(track as any, !enabled)
+  },
+  onTrackLevel: (track, level) => {
+    musicEngine?.setTrackLevel(track as any, level)
+  },
+  onPreset: (preset) => {
+    musicEngine?.applyPreset(preset)
+  },
+})
 
 // ---------------------------------------------------------------------------
 // UI
@@ -489,11 +524,13 @@ const SYSTEM_STORIES = [
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
-type AppState = 'galaxy' | 'zooming-in' | 'solar-system' | 'zooming-out' | 'planet'
+type AppState = 'galaxy' | 'zooming-in' | 'solar-system' | 'zooming-out' | 'planet' | 'life-sim'
 let state: AppState = 'galaxy'
 let selectedSystem: System | null = null
 let solarSystem: SolarSystem | null = null
 let planetView: PlanetView | null = null
+let lifeView: LifeView | null = null
+let narrativeEngine: NarrativeEngine | null = null
 let currentHoveredPlanetIdx = -1
 let stickyPlanetIdx = -1       // last hovered planet — persists for a few seconds
 let stickyPlanetExpiry = 0     // animTime when sticky bubble should hide
@@ -535,7 +572,7 @@ function startZoomIn(sys: System) {
   if (activeAudio) { activeAudio.stop(); activeAudio = null }
 }
 
-function enterSolarSystem() {
+async function enterSolarSystem() {
   hoveredSystem = null   // clear stale galaxy hover so mouseup can't retrigger zoom-in
   stickyPlanetIdx = -1
   galaxyGroup.visible = false
@@ -555,6 +592,13 @@ function enterSolarSystem() {
   state = 'solar-system'
   overlay.style.opacity = '0'
   phenomenaPanel.style.display = 'flex'
+
+  // Start music and assign tracks to planets
+  const engine = getMusicEngine()
+  engine.generateFromSeed(sys.audioSeed)
+  engine.assignPlanetTracks(solarSystem.planetInfos.length)
+  // Don't mute - orbit proximity will control track levels
+  await engine.start()
 }
 
 function goBack() {
@@ -568,6 +612,7 @@ function goBack() {
   overlay.style.opacity = '1'
   setTimeout(() => {
     if (activeAudio) { activeAudio.stop(); activeAudio = null }
+    musicEngine?.stop()
     if (solarSystem) { scene.remove(solarSystem.group); solarSystem.dispose(); solarSystem = null }
     galaxyGroup.visible = true
     setGalaxyOpacity(1)
@@ -754,7 +799,10 @@ backToSystemBtn.style.cssText = `
 `
 backToSystemBtn.addEventListener('mouseenter', () => { backToSystemBtn.style.color = 'rgba(255,255,255,0.85)'; backToSystemBtn.style.borderColor = 'rgba(255,255,255,0.45)' })
 backToSystemBtn.addEventListener('mouseleave', () => { backToSystemBtn.style.color = 'rgba(255,255,255,0.35)'; backToSystemBtn.style.borderColor = 'rgba(255,255,255,0.12)' })
-backToSystemBtn.addEventListener('click', () => { if (state === 'planet') exitPlanet() })
+backToSystemBtn.addEventListener('click', () => {
+  if (state === 'life-sim') exitLifeSim()
+  else if (state === 'planet') exitPlanet()
+})
 document.body.appendChild(backToSystemBtn)
 
 // Zoom-out prompt — shown in solar system when camera is near max distance
@@ -821,10 +869,14 @@ function showOutcome(text: string, color: string) {
     font-family:'Courier New',monospace; font-size:11px; letter-spacing:.18em;
     color:rgba(255,255,255,0.45); pointer-events:auto; cursor:pointer;
   `
-  sub.textContent = text === 'attuned' ? 'click to reseed a new world' : 'click to try again'
+  sub.textContent = text === 'attuned' ? 'click to begin the age of life' : 'click to try again'
   sub.addEventListener('click', () => {
     el.remove()
-    showEventPicker(applyEvent)
+    if (text === 'attuned') {
+      enterLifeSim()
+    } else {
+      showEventPicker(applyEvent)
+    }
   })
   el.appendChild(msg)
   if (text !== 'attuned') {
@@ -870,10 +922,151 @@ function exitPlanet() {
 }
 
 // ---------------------------------------------------------------------------
+// Life-sim UI elements
+// ---------------------------------------------------------------------------
+const lifeStatus = document.createElement('div')
+lifeStatus.style.cssText = `
+  position:fixed; top:18px; left:50%; transform:translateX(-50%);
+  font-family:'Courier New',monospace; font-size:10px; letter-spacing:.12em;
+  color:rgba(255,255,255,0.5); pointer-events:none; display:none; white-space:nowrap;
+`
+document.body.appendChild(lifeStatus)
+
+const funnelLabel = document.createElement('div')
+funnelLabel.textContent = 'THE FUNNEL'
+funnelLabel.style.cssText = `
+  position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+  font-family:'Courier New',monospace; font-size:64px; letter-spacing:.4em;
+  color:rgba(255,80,30,0.08); pointer-events:none; z-index:1;
+`
+document.body.appendChild(funnelLabel)
+
+const relicBanner = document.createElement('div')
+relicBanner.style.cssText = `
+  position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+  font-family:'Courier New',monospace; font-size:12px; letter-spacing:.14em;
+  color:rgba(255,255,255,0.85); background:rgba(0,8,16,0.9);
+  border:1px solid rgba(255,220,100,0.5); border-radius:6px;
+  padding:16px 24px; text-align:center; display:none; pointer-events:none;
+  z-index:6; box-shadow:0 0 30px rgba(255,220,100,0.2);
+`
+document.body.appendChild(relicBanner)
+
+let relicBannerTimer = 0
+
+function showRelicBanner(event: LifeSimEvent) {
+  const r = event.relic
+  const emoji = r.type === 'tech' ? '\u{1F529}' : '\u{1F4DC}'
+  const boost = Math.round(r.tier * 12)
+  const stat  = r.type === 'tech' ? 'Tech' : 'Wisdom'
+  relicBanner.innerHTML = `${emoji} <b>${r.label}</b><br><span style="color:${r.type === 'tech' ? '#44ddff' : '#ffcc44'}">${stat} +${boost}%</span>`
+  relicBanner.style.display = 'block'
+  relicBannerTimer = 3.0
+}
+
+// ---------------------------------------------------------------------------
+// Life-sim transitions
+// ---------------------------------------------------------------------------
+function enterLifeSim() {
+  if (!planetView || !solarSystem) return
+
+  // Keep planet visible as backdrop
+  state = 'life-sim'
+  elementBar.style.display   = 'none'
+  restartBtn.style.display   = 'none'
+  planetStatus.style.display = 'none'
+
+  // Create life simulation on top of the planet
+  const pi = solarSystem.planetInfos[currentPlanetIdx]
+  lifeView = new LifeView(
+    planetView,
+    pi.tempNorm,
+    currentPlanetIdx * 999 + (selectedSystem?.audioSeed ?? 0),
+  )
+  // Add to planetView group so life dots/relics rotate with the planet
+  planetView.group.add(lifeView.group)
+
+  // Start narrative engine
+  narrativeEngine = new NarrativeEngine()
+  narrativeEngine.start()
+
+  // Show life-sim HUD
+  lifeStatus.style.display = 'block'
+  backToSystemBtn.style.display = 'block'
+}
+
+function exitLifeSim() {
+  overlay.style.opacity = '1'
+  lifeStatus.style.display  = 'none'
+  funnelLabel.style.display = 'none'
+  relicBanner.style.display = 'none'
+  backToSystemBtn.style.display = 'none'
+
+  if (narrativeEngine) { narrativeEngine.stop(); narrativeEngine = null }
+
+  setTimeout(() => {
+    if (lifeView && planetView) { planetView.group.remove(lifeView.group); lifeView.dispose(); lifeView = null }
+    if (planetView) { scene.remove(planetView.group); planetView.dispose(); planetView = null }
+    if (solarSystem) solarSystem.group.visible = true
+    camera.position.copy(solarCamPos())
+    camera.lookAt(0, 0, 0)
+    state = 'solar-system'
+    phenomenaPanel.style.display = 'flex'
+    overlay.style.opacity = '0'
+  }, 420)
+}
+
+function showLifeOutcome(survived: boolean) {
+  const el = document.createElement('div')
+  el.id = 'life-outcome'
+  el.style.cssText = `
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:22px; pointer-events:none;
+  `
+  const msg = document.createElement('div')
+  const text  = survived ? 'UTOPIA' : 'COLLAPSE'
+  const color = survived ? '#44ffaa' : '#ff5533'
+  msg.style.cssText = `
+    font-family:'Courier New',monospace; font-size:28px; letter-spacing:.3em;
+    color:${color}; text-shadow:0 0 40px ${color}; text-transform:uppercase;
+    animation:fadeIn 1.2s ease;
+  `
+  msg.textContent = text
+  el.appendChild(msg)
+
+  const sub = document.createElement('div')
+  sub.style.cssText = `
+    font-family:'Courier New',monospace; font-size:11px; letter-spacing:.18em;
+    color:rgba(255,255,255,0.45); pointer-events:auto; cursor:pointer;
+    animation:fadeIn 2.5s ease;
+  `
+  sub.textContent = survived ? 'click to return to the solar system' : 'click to try again'
+  sub.addEventListener('click', () => {
+    el.remove()
+    funnelLabel.style.display = 'none'
+    if (survived) {
+      exitLifeSim()
+    } else {
+      // Restart life on this planet
+      if (lifeView && planetView) { planetView.group.remove(lifeView.group); lifeView.dispose(); lifeView = null }
+      if (narrativeEngine) { narrativeEngine.stop(); narrativeEngine = null }
+      // Re-enter life sim fresh
+      enterLifeSim()
+    }
+  })
+  el.appendChild(sub)
+  document.body.appendChild(el)
+}
+
+// ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
 const mouse = new THREE.Vector2()
 const raycaster = new THREE.Raycaster()
+
+// Invisible plane for orbit proximity detection (y=0, the orbital plane)
+const orbitalPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+const orbitHitPoint = new THREE.Vector3()
 let hoveredSystem: System | null = null
 let activeAudio: SystemLoop | null = null
 let isDragging = false
@@ -912,6 +1105,18 @@ renderer.domElement.addEventListener('wheel', (e) => {
 
 renderer.domElement.addEventListener('mousedown', (e) => {
   unlockAudio()
+  if (state === 'life-sim') {
+    // Relic clicking — raycast against life view relics
+    if (lifeView) {
+      raycaster.setFromCamera(mouse, camera)
+      const evt = lifeView.onPointerDown(raycaster)
+      if (evt) showRelicBanner(evt)
+    }
+    // Also allow planet spinning during life-sim
+    prevMouseX = e.clientX; prevMouseY = e.clientY
+    isPlanetSpinning = true; planetVelX = 0; planetVelY = 0
+    return
+  }
   if (state === 'planet') {
     prevMouseX = e.clientX; prevMouseY = e.clientY
     if (selectedElement && planetView) isPaintDragging = true
@@ -926,7 +1131,7 @@ renderer.domElement.addEventListener('mousedown', (e) => {
 })
 
 document.addEventListener('mouseup', (e) => {
-  if (state === 'planet') {
+  if (state === 'life-sim' || state === 'planet') {
     isPaintDragging = false
     isPlanetSpinning = false
     return
@@ -940,7 +1145,9 @@ document.addEventListener('mouseup', (e) => {
   } else if (state === 'solar-system') {
     if (activeCorner >= 0) goBack()
     else if (Math.abs(dx) < 4 && Math.abs(dy) < 4 && currentHoveredPlanetIdx >= 0) {
-      enterPlanet(currentHoveredPlanetIdx)
+      // Toggle this planet's music track
+      const engine = getMusicEngine()
+      engine.togglePlanet(currentHoveredPlanetIdx)
     }
   }
 })
@@ -951,7 +1158,7 @@ document.addEventListener('mousemove', (e) => {
   mouseX = (e.clientX / window.innerWidth) * 2 - 1
   mouseY = -((e.clientY / window.innerHeight) * 2 - 1)
   mouse.set(mouseX, mouseY)
-  if (state === 'planet' && isPlanetSpinning && planetView) {
+  if ((state === 'planet' || state === 'life-sim') && isPlanetSpinning && planetView) {
     const dx = e.clientX - prevMouseX
     const dy = e.clientY - prevMouseY
     const scale = (Math.PI * 2) / window.innerHeight
@@ -1118,6 +1325,23 @@ function animate(t: number) {
     }
     currentHoveredPlanetIdx = hoveredPlanetIdx  // expose for mouseup
 
+    // Orbit proximity detection: raycast onto the orbital plane
+    let orbitProximities: number[] = []
+    if (solarSystem) {
+      // Account for the solar system's tilt when intersecting the plane
+      const tiltedNormal = new THREE.Vector3(0, 1, 0).applyEuler(solarSystem.group.rotation)
+      const tiltedPlane = new THREE.Plane(tiltedNormal, 0)
+
+      if (raycaster.ray.intersectPlane(tiltedPlane, orbitHitPoint)) {
+        // Get distance from star center (accounting for group position)
+        const distFromCenter = orbitHitPoint.length()
+        orbitProximities = solarSystem.getOrbitProximities(distFromCenter, 0.5)
+
+        // Update music levels based on proximity
+        getMusicEngine().updatePlanetLevels(orbitProximities)
+      }
+    }
+
     // Audio: star hover plays the system loop
     const wantAudio = starHovered
     if (wantAudio && !activeAudio && selectedSystem) {
@@ -1182,7 +1406,8 @@ function animate(t: number) {
     }
 
     renderer.domElement.style.cursor = corner >= 0 ? 'pointer' : (starHovered || hoveredPlanetIdx >= 0) ? 'pointer' : (isDragging ? 'grabbing' : 'grab')
-    solarSystem?.update(dt, starHovered, hoveredPlanetIdx)
+    const activePlanets = musicEngine?.getActivePlanets() ?? []
+    solarSystem?.update(dt, starHovered, hoveredPlanetIdx, activePlanets, orbitProximities)
 
     // Time warp on drag (same as galaxy)
     const solarTargetScale = isDragging ? 1 + solarDragSpeed * 0.18 : 1.0
@@ -1318,6 +1543,85 @@ function animate(t: number) {
     if (activeCorner >= 0) { cornerEls[activeCorner].style.color = 'rgba(255,255,255,0)'; cornerEls[activeCorner].style.display = 'none' }
     activeCorner = -1
     renderer.domElement.style.cursor = isPlanetSpinning ? 'grabbing' : planetHovered ? 'crosshair' : selectedElement ? 'crosshair' : 'grab'
+
+  } else if (state === 'life-sim') {
+    // Planet still rotates as backdrop
+    planetView?.update(dt)
+
+    // Spin inertia
+    if (!isPlanetSpinning && planetView) {
+      planetVelX *= 0.92
+      planetVelY *= 0.92
+      planetView.group.rotation.x += planetVelX
+      planetView.group.rotation.y += planetVelY
+    }
+
+    // Life simulation tick
+    if (lifeView) {
+      lifeView.update(dt)
+
+      // Sync narrative mood
+      if (narrativeEngine) {
+        const d = lifeView.displayData
+        const totalPop = d.types.reduce((s, t) => s + t.population, 0)
+        let mood: NarrativeMood = 'ambient'
+        if (d.outcome === 'survived') mood = 'survived'
+        else if (d.outcome === 'collapsed') mood = 'collapsed'
+        else if (d.funnel) mood = 'funnel'
+        else if (totalPop > 0.7) mood = 'tension'
+        else if (totalPop > 0.3) mood = 'emergence'
+        narrativeEngine.setMood(mood)
+        narrativeEngine.update(dt)
+      }
+
+      // Life-sim HUD
+      const d = lifeView.displayData
+
+      // Population bars per type
+      const typeHtml = d.types
+        .sort((a, b) => b.population - a.population)
+        .map(t => {
+          const pop = Math.round(t.population * 100)
+          return `<span style="opacity:${t.population < 0.01 ? 0.2 : 0.8}">${t.def.emoji} ${pop}%</span>`
+        })
+        .join('  ')
+
+      // Tech & Wisdom bars
+      const techBars   = Math.round(d.techLevel * 10)
+      const wisdomBars = Math.round(d.wisdomLevel * 10)
+      const techBar   = `<span style="color:#44ddff">${'\u2588'.repeat(techBars)}${'\u2591'.repeat(10 - techBars)}</span>`
+      const wisdomBar = `<span style="color:#ffcc44">${'\u2588'.repeat(wisdomBars)}${'\u2591'.repeat(10 - wisdomBars)}</span>`
+
+      lifeStatus.innerHTML =
+        typeHtml +
+        `<span style="opacity:0.3"> \u2502 </span>` +
+        `<span style="color:rgba(255,255,255,0.35)">TECH</span> ${techBar}` +
+        `<span style="opacity:0.3"> </span>` +
+        `<span style="color:rgba(255,255,255,0.35)">WISDOM</span> ${wisdomBar}`
+
+      // Funnel overlay
+      funnelLabel.style.display = d.funnel ? 'flex' : 'none'
+      if (d.funnel) {
+        const pulse = 0.06 + Math.sin(d.funnelTimer * 2) * 0.04
+        funnelLabel.style.color = `rgba(255,80,30,${pulse})`
+      }
+
+      // Relic banner countdown
+      if (relicBannerTimer > 0) {
+        relicBannerTimer -= dt
+        if (relicBannerTimer <= 0) relicBanner.style.display = 'none'
+      }
+
+      // Check outcome
+      if (d.outcome === 'survived' && !document.getElementById('life-outcome')) {
+        showLifeOutcome(true)
+      } else if (d.outcome === 'collapsed' && !document.getElementById('life-outcome')) {
+        showLifeOutcome(false)
+      }
+    }
+
+    // Cursor
+    renderer.domElement.style.cursor = isPlanetSpinning ? 'grabbing' : 'pointer'
   }
 
   renderer.render(scene, camera)
