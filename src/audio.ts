@@ -92,8 +92,18 @@ export function unlockAudio() {
   const MAX_BUFFER_SIZE = sampleRate * 10 // 10 seconds max
   const validLen = Math.min(len, MAX_BUFFER_SIZE)
   
-  if (validLen <= 0 || validLen > MAX_BUFFER_SIZE) {
-    console.warn('Invalid audio buffer size, using default')
+  if (validLen <= 0) {
+    console.warn('Invalid audio buffer size, using minimal fallback')
+    // Create minimal valid buffer as fallback
+    const impulse = sharedCtx.createBuffer(2, sampleRate, sampleRate) // 1 second
+    for (let ch = 0; ch < 2; ch++) {
+      const d = impulse.getChannelData(ch)
+      for (let i = 0; i < sampleRate; i++) {
+        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / sampleRate, 2.2)
+      }
+    }
+    sharedReverb = sharedCtx.createConvolver()
+    sharedReverb.buffer = impulse
     return
   }
   

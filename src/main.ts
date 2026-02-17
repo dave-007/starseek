@@ -45,7 +45,8 @@ const simulateMouseEvent = (touchEvent: TouchEvent, mouseType: string) => {
     clientX: touch.clientX,
     clientY: touch.clientY,
     bubbles: true,
-    cancelable: true
+    cancelable: true,
+    view: window
   })
   
   if (mouseType === 'mousedown' || mouseType === 'mousemove') {
@@ -59,9 +60,7 @@ const simulateMouseEvent = (touchEvent: TouchEvent, mouseType: string) => {
 renderer.domElement.addEventListener('touchstart', (e) => simulateMouseEvent(e, 'mousedown'), { passive: false })
 renderer.domElement.addEventListener('touchmove', (e) => simulateMouseEvent(e, 'mousemove'), { passive: false })
 renderer.domElement.addEventListener('touchend', (e) => {
-  const mouseEvent = new MouseEvent('mouseup', { bubbles: true })
-  document.dispatchEvent(mouseEvent)
-  e.preventDefault()
+  simulateMouseEvent(e, 'mouseup')
 }, { passive: false })
 
 // ---------------------------------------------------------------------------
