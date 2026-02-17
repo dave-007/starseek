@@ -15,6 +15,9 @@ dist/
 *.swp
 *.swo
 *~
+# Logs
+*.log
+npm-debug.log*
 
 # OS files
 .DS_Store
@@ -29,3 +32,11 @@ yarn-error.log*
 # Cache
 .cache/
 .vite/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+/tmp/

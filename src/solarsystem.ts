@@ -264,7 +264,7 @@ export class SolarSystem {
 
     // ── Asteroid belts ────────────────────────────────────────────────────────
     const rand3    = makePRNG(seed + 7)
-    const beltCount = count >= 4 ? 1 + Math.floor(rand3() * 3) : count >= 2 ? 1 + Math.floor(rand3() * 2) : 0
+    const beltCount = count >= 5 ? 2 + Math.floor(rand3() * 2) : count >= 3 ? 1 + Math.floor(rand3() * 2) : 1
 
     // Belt types: rocky / icy / metallic
     const BELT_COLORS = [
@@ -338,8 +338,7 @@ export class SolarSystem {
       this.belts.push({ mesh: instMesh, count: n, angles, radii, speeds, yOffsets, rotAxes, rotAngles, rotSpeeds, scaleXZ })
     }
 
-    // Dispose shared belt geometries
-    for (const g of BELT_GEOS) g.dispose()
+    // Note: BELT_GEOS are referenced by InstancedMeshes and disposed via SolarSystem.dispose()
 
     this.group.rotation.x = 0.28
   }
@@ -440,8 +439,8 @@ export class SolarSystem {
         const ax = belt.rotAxes[k*3], ay = belt.rotAxes[k*3+1], az = belt.rotAxes[k*3+2]
         _tempAxis.set(ax, ay, az)
         d.quaternion.setFromAxisAngle(_tempAxis, belt.rotAngles[k])
-        const size = 0.022 + (belt.radii[k] % 0.07) * 0.3   // vary by index for spread
-        d.scale.set(size * belt.scaleXZ[k*2], size * (0.55 + (k % 7) * 0.07), size * belt.scaleXZ[k*2+1])
+        const size = 0.025 + ((k * 7 + 13) % 19) / 19 * 0.055  // varied but consistent per asteroid
+        d.scale.set(size * belt.scaleXZ[k*2], size * (0.5 + (k % 5) * 0.12), size * belt.scaleXZ[k*2+1])
         d.updateMatrix()
         belt.mesh.setMatrixAt(k, d.matrix)
       }
