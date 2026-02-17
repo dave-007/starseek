@@ -160,6 +160,12 @@ export class SystemLoop {
     this.scheduleLoop(ctx.currentTime)
   }
 
+  setVolume(vol: number) {
+    if (this.masterGain && sharedCtx) {
+      this.masterGain.gain.setTargetAtTime(vol, sharedCtx.currentTime, 0.3)
+    }
+  }
+
   stop() {
     if (!this.active || !sharedCtx) return
     this.active = false
