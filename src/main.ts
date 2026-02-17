@@ -393,6 +393,7 @@ function enterPlanet(idx: number) {
     camera.lookAt(0, 0, 0)
     state = 'planet'
     elementBar.style.display = 'flex'
+    backToSystemBtn.style.display = 'block'
     restartBtn.style.display = 'block'
     planetStatus.style.display = 'block'
     updateElementUI()
@@ -401,6 +402,21 @@ function enterPlanet(idx: number) {
     showEventPicker(applyEvent)
   }, 420)
 }
+
+// Back-to-solar-system button (top-left, always visible in planet state)
+const backToSystemBtn = document.createElement('div')
+backToSystemBtn.textContent = '← system'
+backToSystemBtn.style.cssText = `
+  position:fixed; top:18px; left:18px;
+  font-family:'Courier New',monospace; font-size:11px; letter-spacing:.14em;
+  color:rgba(255,255,255,0.35); border:1px solid rgba(255,255,255,0.12);
+  padding:5px 14px; cursor:pointer; display:none;
+  transition:color .2s, border-color .2s; background:rgba(0,0,8,0.5);
+`
+backToSystemBtn.addEventListener('mouseenter', () => { backToSystemBtn.style.color = 'rgba(255,255,255,0.85)'; backToSystemBtn.style.borderColor = 'rgba(255,255,255,0.45)' })
+backToSystemBtn.addEventListener('mouseleave', () => { backToSystemBtn.style.color = 'rgba(255,255,255,0.35)'; backToSystemBtn.style.borderColor = 'rgba(255,255,255,0.12)' })
+backToSystemBtn.addEventListener('click', () => { if (state === 'planet') exitPlanet() })
+document.body.appendChild(backToSystemBtn)
 
 // Planet status bar (match score + coverage)
 const planetStatus = document.createElement('div')
@@ -477,6 +493,7 @@ function exitPlanet() {
   document.getElementById('planet-outcome')?.remove()
   overlay.style.opacity = '1'
   elementBar.style.display = 'none'
+  backToSystemBtn.style.display = 'none'
   restartBtn.style.display = 'none'
   planetStatus.style.display = 'none'
   label.style.display = 'none'
@@ -533,7 +550,6 @@ renderer.domElement.addEventListener('mousedown', (e) => {
 document.addEventListener('mouseup', (e) => {
   if (state === 'planet') {
     isPaintDragging = false
-    if (activeCorner >= 0) exitPlanet()
     return
   }
   if (!isDragging) return
@@ -806,29 +822,16 @@ function animate(t: number) {
       else if (outcome === 'lost' && !document.getElementById('planet-outcome')) showOutcome('planet lost', '#ff4422')
     }
 
-    // Cursor: show element color cursor when element selected and hovering planet
+    // Cursor: crosshair when hovering planet with element selected
     let planetHovered = false
     if (planetView && selectedElement) {
       raycaster.setFromCamera(mouse, camera)
       planetHovered = raycaster.intersectObjects(planetView.group.children, false).length > 0
     }
-
-    // Corner nav
-    const W = window.innerWidth, H = window.innerHeight
-    const corner = (mouseScreenX < CORNER_MARGIN && mouseScreenY < CORNER_MARGIN) ? 0
-      : (mouseScreenX > W - CORNER_MARGIN && mouseScreenY < CORNER_MARGIN) ? 1
-      : (mouseScreenX < CORNER_MARGIN && mouseScreenY > H - CORNER_MARGIN) ? 2
-      : (mouseScreenX > W - CORNER_MARGIN && mouseScreenY > H - CORNER_MARGIN) ? 3 : -1
-
-    if (corner !== activeCorner) {
-      if (activeCorner >= 0) { cornerEls[activeCorner].style.color = 'rgba(255,255,255,0)' }
-      activeCorner = corner
-      cornerEls.forEach((el, i) => {
-        el.style.display = i === corner ? 'block' : 'none'
-        if (i === corner) requestAnimationFrame(() => { el.style.color = 'rgba(255,255,255,0.55)' })
-      })
-    }
-    renderer.domElement.style.cursor = corner >= 0 ? 'pointer' : planetHovered ? 'crosshair' : 'default'
+    // Hide corner nav in planet state (back button replaces it)
+    if (activeCorner >= 0) { cornerEls[activeCorner].style.color = 'rgba(255,255,255,0)'; cornerEls[activeCorner].style.display = 'none' }
+    activeCorner = -1
+    renderer.domElement.style.cursor = planetHovered ? 'crosshair' : 'default'
   }
 
   renderer.render(scene, camera)
