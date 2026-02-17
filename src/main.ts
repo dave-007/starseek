@@ -307,7 +307,20 @@ PHENOMENON_DEFS.forEach(({ key, label }) => {
     transition:color .15s; white-space:nowrap; padding:2px 0;
   `
   btn.textContent = `○ ${label}`
+  // Accessibility improvements
+  btn.setAttribute('role', 'button')
+  btn.setAttribute('aria-label', `Toggle ${label} phenomenon`)
+  btn.setAttribute('aria-pressed', 'false')
+  btn.setAttribute('tabindex', '0')
+  
   btn.addEventListener('click', () => togglePhenomenon(key))
+  btn.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      togglePhenomenon(key)
+    }
+  })
+  
   phenomenaPanel.appendChild(btn)
   phenomenaBtns[key] = btn
 })
@@ -358,6 +371,7 @@ function updatePhenomenaUI() {
     const label = PHENOMENON_DEFS.find(d => d.key === key)!.label
     btn.textContent = `${on ? '●' : '○'} ${label}`
     btn.style.color = on ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.3)'
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false')
   }
 }
 
@@ -395,7 +409,20 @@ GALAXY_PHENOMENON_DEFS.forEach(({ key, label }) => {
     transition:color .15s; white-space:nowrap; padding:2px 0;
   `
   btn.textContent = `○ ${label}`
+  // Accessibility improvements
+  btn.setAttribute('role', 'button')
+  btn.setAttribute('aria-label', `Toggle ${label} galaxy phenomenon`)
+  btn.setAttribute('aria-pressed', 'false')
+  btn.setAttribute('tabindex', '0')
+  
   btn.addEventListener('click', () => toggleGalaxyPhenomenon(key))
+  btn.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      toggleGalaxyPhenomenon(key)
+    }
+  })
+  
   galaxyPhenomenaPanel.appendChild(btn)
   galaxyPhenomenaBtns[key] = btn
 })
@@ -457,6 +484,7 @@ function updateGalaxyPhenomenaUI() {
     const label = GALAXY_PHENOMENON_DEFS.find(d => d.key === key)!.label
     btn.textContent = `${on ? '●' : '○'} ${label}`
     btn.style.color = on ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.3)'
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false')
   }
 }
 
@@ -628,10 +656,23 @@ ELEMENTS.forEach(({ key, label, color }) => {
     background:${color}0d;
   `
   btn.textContent = label
+  // Accessibility improvements
+  btn.setAttribute('role', 'button')
+  btn.setAttribute('aria-label', `Select ${label} element`)
+  btn.setAttribute('aria-pressed', 'false')
+  btn.setAttribute('tabindex', '0')
+  
   btn.addEventListener('mousedown', (e) => {
     e.stopPropagation()
     selectedElement = selectedElement === key ? null : key
     updateElementUI()
+  })
+  btn.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      selectedElement = selectedElement === key ? null : key
+      updateElementUI()
+    }
   })
   elementBar.appendChild(btn)
   elementBtns.push(btn)
@@ -645,6 +686,7 @@ function updateElementUI() {
     const isHinted = planetView && (planetView.resonance[key] - mix[key] > 0.14)
     const hint = isHinted ? ' ·' : ''
     elementBtns[i].textContent = `${ELEMENTS[i].label}${hint}`
+    elementBtns[i].setAttribute('aria-pressed', active ? 'true' : 'false')
     if (active) {
       elementBtns[i].style.background   = `${color}44`
       elementBtns[i].style.borderColor  = color
@@ -763,9 +805,20 @@ backToSystemBtn.style.cssText = `
   padding:5px 14px; cursor:pointer; display:none;
   transition:color .2s, border-color .2s; background:rgba(0,0,8,0.5);
 `
+// Accessibility improvements
+backToSystemBtn.setAttribute('role', 'button')
+backToSystemBtn.setAttribute('aria-label', 'Return to solar system view')
+backToSystemBtn.setAttribute('tabindex', '0')
+
 backToSystemBtn.addEventListener('mouseenter', () => { backToSystemBtn.style.color = 'rgba(255,255,255,0.85)'; backToSystemBtn.style.borderColor = 'rgba(255,255,255,0.45)' })
 backToSystemBtn.addEventListener('mouseleave', () => { backToSystemBtn.style.color = 'rgba(255,255,255,0.35)'; backToSystemBtn.style.borderColor = 'rgba(255,255,255,0.12)' })
 backToSystemBtn.addEventListener('click', () => { if (state === 'planet') exitPlanet() })
+backToSystemBtn.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault()
+    if (state === 'planet') exitPlanet()
+  }
+})
 document.body.appendChild(backToSystemBtn)
 
 // Zoom-out prompt — shown in solar system when camera is near max distance
@@ -798,10 +851,21 @@ restartBtn.style.cssText = `
   padding:5px 14px; cursor:pointer; display:none;
   transition:color .2s, border-color .2s; background:rgba(0,0,8,0.5);
 `
+// Accessibility improvements
+restartBtn.setAttribute('role', 'button')
+restartBtn.setAttribute('aria-label', 'Restart planet with new seed')
+restartBtn.setAttribute('tabindex', '0')
+
 restartBtn.addEventListener('mouseenter', () => { restartBtn.style.color = 'rgba(255,255,255,0.85)'; restartBtn.style.borderColor = 'rgba(255,255,255,0.45)' })
 restartBtn.addEventListener('mouseleave', () => { restartBtn.style.color = 'rgba(255,255,255,0.35)'; restartBtn.style.borderColor = 'rgba(255,255,255,0.12)' })
 restartBtn.addEventListener('click', () => {
   if (state === 'planet') showEventPicker(applyEvent)
+})
+restartBtn.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault()
+    if (state === 'planet') showEventPicker(applyEvent)
+  }
 })
 document.body.appendChild(restartBtn)
 
@@ -898,6 +962,20 @@ let timeScale = 1.0
 let animTime = 0
 let prevT = 0
 let mouseX = 0, mouseY = 0
+
+// Safe raycaster helper with error handling
+function safeRaycast(objects: THREE.Object3D | THREE.Object3D[], recursive = false): THREE.Intersection[] {
+  try {
+    if (Array.isArray(objects)) {
+      return raycaster.intersectObjects(objects, recursive)
+    } else {
+      return raycaster.intersectObject(objects, recursive)
+    }
+  } catch (e) {
+    console.error('Raycast failed:', e)
+    return []
+  }
+}
 
 // Compute solar camera world position from spherical coords
 function solarCamPos(): THREE.Vector3 {
@@ -1035,7 +1113,7 @@ function animate(t: number) {
 
     // Hover
     raycaster.setFromCamera(mouse, camera)
-    const hits = raycaster.intersectObject(galaxy)
+    const hits = safeRaycast(galaxy)
     let newHovered: System | null = null
     if (hits.length > 0) {
       const localHit = galaxy.worldToLocal(hits[0].point.clone()).normalize()
@@ -1116,13 +1194,13 @@ function animate(t: number) {
   } else if (state === 'solar-system') {
     raycaster.setFromCamera(mouse, camera)
 
-    const starHovered = solarSystem ? raycaster.intersectObject(solarSystem.star).length > 0 : false
+    const starHovered = solarSystem ? safeRaycast(solarSystem.star).length > 0 : false
 
-    // Planet hover — check all planet meshes
+    // Planet hover — check all planet meshes (cache meshes for performance)
     let hoveredPlanetIdx = -1
     if (solarSystem && !starHovered) {
       const meshes = solarSystem.planetInfos.map(p => p.mesh)
-      const hits = raycaster.intersectObjects(meshes)
+      const hits = safeRaycast(meshes)
       if (hits.length > 0) hoveredPlanetIdx = meshes.indexOf(hits[0].object as THREE.Mesh)
     }
     currentHoveredPlanetIdx = hoveredPlanetIdx  // expose for mouseup
@@ -1251,7 +1329,7 @@ function animate(t: number) {
     // Painting: raycast against planet mesh while mouse is held and element selected
     if (planetView && isPaintDragging && selectedElement) {
       raycaster.setFromCamera(mouse, camera)
-      const hits = raycaster.intersectObjects(planetView.group.children, false)
+      const hits = safeRaycast(planetView.group.children, false)
       if (hits.length > 0) {
         const cellIdx = planetView.nearestCell(hits[0].point)
         planetView.paint(cellIdx, selectedElement)
@@ -1306,7 +1384,7 @@ function animate(t: number) {
     let planetHovered = false
     if (planetView && selectedElement) {
       raycaster.setFromCamera(mouse, camera)
-      planetHovered = raycaster.intersectObjects(planetView.group.children, false).length > 0
+      planetHovered = safeRaycast(planetView.group.children, false).length > 0
     }
     // Hide corner nav in planet state (back button replaces it)
     if (activeCorner >= 0) { cornerEls[activeCorner].style.color = 'rgba(255,255,255,0)'; cornerEls[activeCorner].style.display = 'none' }
