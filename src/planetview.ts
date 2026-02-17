@@ -69,6 +69,7 @@ export class PlanetView {
   readonly cellCount:   number
   readonly cellCentroids: THREE.Vector3[]  // unit-sphere positions, for hit-testing
   readonly resonance:   ElementMix         // planet's hidden preferred mix
+  readonly tempNorm:    number             // 0 = frozen, 1 = inferno
 
   private adj:      number[][]
   private setCell:  (i: number, r: number, g: number, b: number) => void
@@ -92,7 +93,8 @@ export class PlanetView {
   readonly zones: ResonanceZone[] = []
   private cellZone: Int16Array     // zone index per cell, -1 = no zone
 
-  constructor(seed: number, color: THREE.Color) {
+  constructor(seed: number, color: THREE.Color, tempNorm: number = 0.5) {
+    this.tempNorm = tempNorm
     this.color = color.clone()
     const surface = buildSurfaceMesh(4, 1.0)
     this.group.add(surface.mesh)
@@ -362,6 +364,23 @@ export class PlanetView {
     }
 
     this.frontier = nextFrontier
+
+    // Thermal pressure — hot worlds evaporate non-fire; cold worlds freeze out fire
+    if (this.tempNorm > 0.65 || this.tempNorm < 0.35) {
+      const isHot    = this.tempNorm > 0.65
+      const pressure = isHot ? (this.tempNorm - 0.65) / 0.35 : (0.35 - this.tempNorm) / 0.35
+      const tickChance = pressure * 0.005 * dt * 60
+      for (let i = 0; i < this.cellCount; i++) {
+        const c = this.cells[i]
+        if (c.phase < 0.3 || !c.element) continue
+        const shouldDrain = isHot ? c.element !== 'fire' : c.element === 'fire'
+        if (shouldDrain && Math.random() < tickChance) {
+          c.phase = Math.max(0, c.phase - 0.18)
+          if (c.phase <= 0) { c.queued = false; c.element = null }
+        }
+      }
+    }
+
     this.flush()
 
     // Zone scores + lit fraction + outcome
@@ -383,6 +402,21 @@ export class PlanetView {
     // Win: covered enough AND zones mostly correct
     if (this._litFraction >= 0.72 && zoneAttunement >= 0.68) this._outcome = 'won'
     else if (this.frontier.length === 0 && this._litFraction < 0.22 && this.timePlaying > 5) this._outcome = 'lost'
+  }
+
+  /** Eons text for failed-attunement narrative */
+  static randomEonTale(): string {
+    const TALES = [
+      'ten thousand years of silence passed. then a comet struck and the elements stirred again.',
+      'the atmosphere collapsed. slowly, over eons, volcanic pressure rebuilt it from nothing.',
+      'ice age. a long dark. a faint warmth from the core kept the deep waters liquid.',
+      'the star dimmed. then, in a burst of stellar fury, it re-ignited everything.',
+      'dust and stone for a million years — until a passing moon drew tidal heat from the mantle.',
+      'the world exhaled its oceans into space. in time, comets returned them drop by drop.',
+      'silence for an age. then lightning carved the first complex molecules in the atmosphere.',
+      'the crust hardened. cracked. the planet breathed again through ten thousand rifts.',
+    ]
+    return TALES[Math.floor(Math.random() * TALES.length)]
   }
 
   get complete(): boolean { return this._outcome !== 'playing' }

@@ -6,7 +6,10 @@ import { SolarSystem } from './solarsystem'
 import { PlanetView, DEFAULT_MIX, ElementMix, ElementKey, SEED_EVENTS, SeedEvent, ELEMENT_COLORS } from './planetview'
 import {
   type Phenomenon, type PhenomenonKey,
-  createRadio, createUFO, createComet, createCityLights, createFormation, createAnomaly
+  createRadio, createUFO, createComet, createCityLights, createFormation, createAnomaly,
+  type GalaxyPhenomenon, type GalaxyPhenomenonKey,
+  createNebulae, createSignalWeb, createStarStreams, createWormhole, createPulsars, createVoid,
+  createMessierObjects, createRandomOddnessStub
 } from './phenomena'
 
 // ---------------------------------------------------------------------------
@@ -50,11 +53,66 @@ sun.position.set(5, 3, 5)
 galaxyGroup.add(sun)
 
 // Stars — shared between both views
-const starPos = new Float32Array(2000 * 3)
-for (let i = 0; i < starPos.length; i++) starPos[i] = (Math.random() - 0.5) * 200
-const starGeo = new THREE.BufferGeometry()
-starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3))
-scene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.1 })))
+// Background stars — varied sizes and tints
+;(() => {
+  const N = 2200
+  const pos  = new Float32Array(N * 3)
+  const cols = new Float32Array(N * 3)
+  const STAR_COLORS = [
+    [1.0, 0.9, 0.8],   // warm white
+    [0.8, 0.9, 1.0],   // cool blue
+    [1.0, 0.85, 0.6],  // yellow giant
+    [1.0, 0.6, 0.5],   // red giant
+    [0.9, 0.9, 1.0],   // neutral
+  ]
+  for (let i = 0; i < N; i++) {
+    pos[i*3]   = (Math.random() - 0.5) * 200
+    pos[i*3+1] = (Math.random() - 0.5) * 200
+    pos[i*3+2] = (Math.random() - 0.5) * 200
+    const c = STAR_COLORS[Math.floor(Math.random() * STAR_COLORS.length)]
+    const bright = 0.5 + Math.random() * 0.5
+    cols[i*3] = c[0] * bright; cols[i*3+1] = c[1] * bright; cols[i*3+2] = c[2] * bright
+  }
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+  geo.setAttribute('color',    new THREE.BufferAttribute(cols, 3))
+  scene.add(new THREE.Points(geo, new THREE.PointsMaterial({ vertexColors: true, size: 0.09, sizeAttenuation: true })))
+
+  // Binary star pairs — close doubles scattered in the background
+  const BINARY_COUNT = 18
+  for (let b = 0; b < BINARY_COUNT; b++) {
+    const cx = (Math.random()-0.5)*160, cy = (Math.random()-0.5)*160, cz = (Math.random()-0.5)*160
+    const sep = 0.6 + Math.random() * 1.2
+    const ang = Math.random() * Math.PI * 2
+    const hue1 = Math.random(), hue2 = (hue1 + 0.3 + Math.random()*0.4) % 1
+    const col1 = new THREE.Color().setHSL(hue1, 0.7, 0.7)
+    const col2 = new THREE.Color().setHSL(hue2, 0.6, 0.65)
+    for (const [ox, col] of [[-sep/2, col1], [sep/2, col2]] as [number, THREE.Color][]) {
+      const bp = new Float32Array(3)
+      bp[0] = cx + Math.cos(ang)*ox; bp[1] = cy; bp[2] = cz + Math.sin(ang)*ox
+      const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.BufferAttribute(bp, 3))
+      scene.add(new THREE.Points(bg, new THREE.PointsMaterial({ color: col, size: 0.22, sizeAttenuation: true })))
+    }
+  }
+
+  // Star formation clusters — decorative groupings in the far background
+  const CLUSTER_COUNT = 6
+  for (let cl = 0; cl < CLUSTER_COUNT; cl++) {
+    const cx = (Math.random()-0.5)*140, cy = (Math.random()-0.5)*140, cz = (Math.random()-0.5)*140
+    const clN = 12 + Math.floor(Math.random() * 20)
+    const cpos = new Float32Array(clN * 3)
+    const spread = 2 + Math.random() * 4
+    const hue = Math.random()
+    for (let k = 0; k < clN; k++) {
+      cpos[k*3]   = cx + (Math.random()-0.5)*spread
+      cpos[k*3+1] = cy + (Math.random()-0.5)*spread * 0.3  // flattened disk shape
+      cpos[k*3+2] = cz + (Math.random()-0.5)*spread
+    }
+    const cg = new THREE.BufferGeometry(); cg.setAttribute('position', new THREE.BufferAttribute(cpos, 3))
+    const clusterCol = new THREE.Color().setHSL(hue, 0.55, 0.7)
+    scene.add(new THREE.Points(cg, new THREE.PointsMaterial({ color: clusterCol, size: 0.13, transparent: true, opacity: 0.7 })))
+  }
+})()
 
 // ---------------------------------------------------------------------------
 // Starting systems
@@ -82,7 +140,7 @@ function randomSystemColor(): THREE.Color {
 }
 
 const systems: System[] = []
-const systemCount = 3
+const systemCount = 9
 
 for (let i = 0; i < systemCount; i++) {
   const localPos = randomSpherePoint()
@@ -271,6 +329,115 @@ function updatePhenomenaUI() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Galaxy phenomena — toggleable star-layer animations
+// ---------------------------------------------------------------------------
+const GALAXY_PHENOMENON_DEFS: { key: GalaxyPhenomenonKey; label: string }[] = [
+  { key: 'nebulae',      label: 'Nebulae'        },
+  { key: 'signalweb',    label: 'Signal Web'     },
+  { key: 'streams',      label: 'Star Streams'   },
+  { key: 'wormhole',     label: 'Wormhole'       },
+  { key: 'pulsars',      label: 'Pulsars'        },
+  { key: 'void',         label: 'Void'           },
+  { key: 'messier',      label: 'Deep-Sky Objects'},
+  { key: 'randomoddness',label: 'Random Oddness' },
+]
+
+const galaxyPhenomenaActive: Partial<Record<GalaxyPhenomenonKey, boolean>> = {}
+const galaxyPhenomenaInstances: Partial<Record<GalaxyPhenomenonKey, GalaxyPhenomenon>> = {}
+GALAXY_PHENOMENON_DEFS.forEach(d => { galaxyPhenomenaActive[d.key] = false })
+
+const galaxyPhenomenaPanel = document.createElement('div')
+galaxyPhenomenaPanel.style.cssText = `
+  position:fixed; left:18px; top:50%; transform:translateY(-50%);
+  display:flex; flex-direction:column; gap:6px;
+`
+document.body.appendChild(galaxyPhenomenaPanel)
+
+const galaxyPhenomenaBtns: Partial<Record<GalaxyPhenomenonKey, HTMLElement>> = {}
+GALAXY_PHENOMENON_DEFS.forEach(({ key, label }) => {
+  const btn = document.createElement('div')
+  btn.style.cssText = `
+    font-family:'Courier New',monospace; font-size:10px; letter-spacing:.1em;
+    color:rgba(255,255,255,0.3); cursor:pointer; user-select:none;
+    transition:color .15s; white-space:nowrap; padding:2px 0;
+  `
+  btn.textContent = `○ ${label}`
+  btn.addEventListener('click', () => toggleGalaxyPhenomenon(key))
+  galaxyPhenomenaPanel.appendChild(btn)
+  galaxyPhenomenaBtns[key] = btn
+})
+
+function toggleGalaxyPhenomenon(key: GalaxyPhenomenonKey) {
+  const wasOn = galaxyPhenomenaActive[key]
+  galaxyPhenomenaActive[key] = !wasOn
+  if (wasOn) {
+    const inst = galaxyPhenomenaInstances[key]
+    if (inst) { scene.remove(inst.group); inst.dispose(); delete galaxyPhenomenaInstances[key] }
+    if (key === 'randomoddness') randomOddnessActive = false
+  } else {
+    spawnGalaxyPhenomenon(key)
+  }
+  updateGalaxyPhenomenaUI()
+}
+
+function spawnGalaxyPhenomenon(key: GalaxyPhenomenonKey) {
+  const seed = key.charCodeAt(0) * 9999
+  const sysPositions = systems.map(s => s.localPos.clone().applyMatrix4(galaxy.matrixWorld))
+  let inst: GalaxyPhenomenon | null = null
+  switch (key) {
+    case 'nebulae':      inst = createNebulae(seed); break
+    case 'signalweb':    inst = createSignalWeb(seed, sysPositions); break
+    case 'streams':      inst = createStarStreams(seed); break
+    case 'wormhole':     inst = createWormhole(seed); break
+    case 'pulsars':      inst = createPulsars(seed, sysPositions); break
+    case 'void':         inst = createVoid(seed); break
+    case 'messier':      inst = createMessierObjects(seed); break
+    case 'randomoddness':inst = createRandomOddnessStub(); randomOddnessActive = true; scheduleNextOddness(); break
+  }
+  if (inst) { scene.add(inst.group); galaxyPhenomenaInstances[key] = inst }
+}
+
+// Random Oddness — master timer that randomly flips other phenomena on/off
+let randomOddnessActive = false
+let randomOddnessTimer  = 0
+
+function scheduleNextOddness() {
+  randomOddnessTimer = 6 + Math.random() * 12   // 6–18 s between events
+}
+
+function tickRandomOddness(dt: number) {
+  if (!randomOddnessActive) return
+  randomOddnessTimer -= dt
+  if (randomOddnessTimer > 0) return
+  scheduleNextOddness()
+  // Pick a random non-oddness key and toggle it
+  const ODDS_KEYS: GalaxyPhenomenonKey[] = ['nebulae', 'signalweb', 'streams', 'wormhole', 'pulsars', 'void', 'messier']
+  const key = ODDS_KEYS[Math.floor(Math.random() * ODDS_KEYS.length)]
+  toggleGalaxyPhenomenon(key)
+}
+
+function updateGalaxyPhenomenaUI() {
+  for (const { key } of GALAXY_PHENOMENON_DEFS) {
+    const on  = galaxyPhenomenaActive[key]
+    const btn = galaxyPhenomenaBtns[key]
+    if (!btn) continue
+    const label = GALAXY_PHENOMENON_DEFS.find(d => d.key === key)!.label
+    btn.textContent = `${on ? '●' : '○'} ${label}`
+    btn.style.color = on ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.3)'
+  }
+}
+
+function teardownAllGalaxyPhenomena() {
+  for (const key of Object.keys(galaxyPhenomenaInstances) as GalaxyPhenomenonKey[]) {
+    const inst = galaxyPhenomenaInstances[key]
+    if (inst) { scene.remove(inst.group); inst.dispose(); delete galaxyPhenomenaInstances[key] }
+  }
+  GALAXY_PHENOMENON_DEFS.forEach(d => { galaxyPhenomenaActive[d.key] = false })
+  randomOddnessActive = false
+  updateGalaxyPhenomenaUI()
+}
+
 function teardownAllPhenomena() {
   for (const key of Object.keys(phenomenaInstances) as PhenomenonKey[]) {
     const inst = phenomenaInstances[key]
@@ -279,6 +446,27 @@ function teardownAllPhenomena() {
   PHENOMENON_DEFS.forEach(d => { phenomenaActive[d.key] = false })
   updatePhenomenaUI()
 }
+
+// ---------------------------------------------------------------------------
+// Story fragments — shown on hover instead of "Start here?"
+// ---------------------------------------------------------------------------
+const SYSTEM_STORIES = [
+  'something ancient drifts here...',
+  'the light took ten thousand years to reach you',
+  'they called it the eye of nothing',
+  'a signal repeated once, then stopped',
+  'three moons, no shadows',
+  'the rocks here remember water',
+  'it whispers in a frequency we almost understand',
+  'here the spiral arm grows thin',
+  'what grew here outgrew the star',
+  'the survey team never filed a report',
+  'its orbit should not be possible',
+  'the atmosphere is the wrong color',
+  'the mathematics suggests a second sun, long gone',
+  'magnetic north points inward',
+  'the core sings at the same frequency as thought',
+]
 
 // ---------------------------------------------------------------------------
 // State
@@ -333,6 +521,7 @@ function enterSolarSystem() {
   hoveredSystem = null   // clear stale galaxy hover so mouseup can't retrigger zoom-in
   stickyPlanetIdx = -1
   galaxyGroup.visible = false
+  galaxyPhenomenaPanel.style.display = 'none'
   const sys = selectedSystem!
   solarSystem = new SolarSystem(sys.audioSeed, sys.color, sys.pulseSpeed)
   scene.add(solarSystem.group)
@@ -352,6 +541,7 @@ function enterSolarSystem() {
 
 function goBack() {
   if (state !== 'solar-system') return
+  zoomOutPrompt.style.display = 'none'
   cornerEls.forEach(el => { el.style.display = 'none' })
   thoughtBubble.style.display = 'none'
   label.style.display = 'none'
@@ -365,6 +555,7 @@ function goBack() {
     setGalaxyOpacity(1)
     camera.position.set(0, 0, 3)
     camera.lookAt(0, 0, 0)
+    galaxyPhenomenaPanel.style.display = 'flex'
     activeCorner = -1
     cornerEls.forEach(el => { el.style.color = 'rgba(255,255,255,0)'; el.style.display = 'none' })
     state = 'galaxy'
@@ -452,6 +643,13 @@ eventTitle.style.cssText = `
 eventTitle.textContent = 'Choose a seeding event'
 eventPicker.appendChild(eventTitle)
 
+const eventWorldHint = document.createElement('div')
+eventWorldHint.style.cssText = `
+  font-family:'Courier New',monospace; font-size:10px; letter-spacing:.14em;
+  color:rgba(255,200,100,0.0); transition:color 0.4s; text-align:center;
+`
+eventPicker.appendChild(eventWorldHint)
+
 const eventGrid = document.createElement('div')
 eventGrid.style.cssText = `display:grid; grid-template-columns:repeat(3,1fr); gap:10px; max-width:480px; width:100%;`
 eventPicker.appendChild(eventGrid)
@@ -496,7 +694,7 @@ function enterPlanet(idx: number) {
   setTimeout(() => {
     if (solarSystem) solarSystem.group.visible = false
     selectedElement = null
-    planetView = new PlanetView(idx * 999 + (selectedSystem?.audioSeed ?? 0), pi.baseColor)
+    planetView = new PlanetView(idx * 999 + (selectedSystem?.audioSeed ?? 0), pi.baseColor, pi.tempNorm)
     scene.add(planetView.group)
     camera.position.set(0, 0, 2.4)
     camera.lookAt(0, 0, 0)
@@ -507,6 +705,17 @@ function enterPlanet(idx: number) {
     planetStatus.style.display = 'block'
     updateElementUI()
     overlay.style.opacity = '0'
+    // Show world-temperature hint in event picker
+    if (pi.tempNorm > 0.65) {
+      eventWorldHint.textContent = '🔥 hot world — fire resists all other elements'
+      eventWorldHint.style.color = 'rgba(255,140,60,0.65)'
+    } else if (pi.tempNorm < 0.35) {
+      eventWorldHint.textContent = '❄  frozen world — fire fades quickly in the cold'
+      eventWorldHint.style.color = 'rgba(120,180,255,0.65)'
+    } else {
+      eventWorldHint.textContent = '◌ temperate world — elements are in balance'
+      eventWorldHint.style.color = 'rgba(255,255,255,0.35)'
+    }
     // Planet is paused until event picker is dismissed
     showEventPicker(applyEvent)
   }, 420)
@@ -526,6 +735,17 @@ backToSystemBtn.addEventListener('mouseenter', () => { backToSystemBtn.style.col
 backToSystemBtn.addEventListener('mouseleave', () => { backToSystemBtn.style.color = 'rgba(255,255,255,0.35)'; backToSystemBtn.style.borderColor = 'rgba(255,255,255,0.12)' })
 backToSystemBtn.addEventListener('click', () => { if (state === 'planet') exitPlanet() })
 document.body.appendChild(backToSystemBtn)
+
+// Zoom-out prompt — shown in solar system when camera is near max distance
+const zoomOutPrompt = document.createElement('div')
+zoomOutPrompt.textContent = '↑ scroll to return to galaxy'
+zoomOutPrompt.style.cssText = `
+  position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+  font-family:'Courier New',monospace; font-size:10px; letter-spacing:.14em;
+  color:rgba(255,255,255,0); pointer-events:none; display:none; transition:color 0.8s;
+  white-space:nowrap;
+`
+document.body.appendChild(zoomOutPrompt)
 
 // Planet status bar (match score + coverage)
 const planetStatus = document.createElement('div')
@@ -586,6 +806,16 @@ function showOutcome(text: string, color: string) {
     showEventPicker(applyEvent)
   })
   el.appendChild(msg)
+  if (text !== 'attuned') {
+    const tale = document.createElement('div')
+    tale.style.cssText = `
+      font-family:'Courier New',monospace; font-size:10px; letter-spacing:.12em;
+      color:rgba(255,255,255,0.28); max-width:420px; text-align:center;
+      line-height:1.7; animation:fadeIn 2.8s ease;
+    `
+    tale.textContent = PlanetView.randomEonTale()
+    el.appendChild(tale)
+  }
   el.appendChild(sub)
   document.body.appendChild(el)
   if (!document.getElementById('planet-outcome-style')) {
@@ -650,7 +880,13 @@ renderer.domElement.addEventListener('wheel', (e) => {
   if (state !== 'solar-system') return
   e.preventDefault()
   const delta = e.deltaY > 0 ? 1.12 : 0.89   // scroll down = zoom out
-  solarCamDistTarget = Math.max(SOLAR_CAM_DIST_MIN, Math.min(SOLAR_CAM_DIST_MAX, solarCamDistTarget * delta))
+  const newDist = solarCamDistTarget * delta
+  if (newDist > SOLAR_CAM_DIST_MAX && e.deltaY > 0) {
+    // Scrolled past max — return to galaxy
+    goBack()
+    return
+  }
+  solarCamDistTarget = Math.max(SOLAR_CAM_DIST_MIN, Math.min(SOLAR_CAM_DIST_MAX, newDist))
 }, { passive: false })
 
 renderer.domElement.addEventListener('mousedown', (e) => {
@@ -790,8 +1026,19 @@ function animate(t: number) {
       mat.color.lerp(sys === hoveredSystem ? new THREE.Color(0xffffff) : sys.color, 0.15)
     }
 
-    // Label
+    // Hover zoom — gently pull camera toward hovered system
     if (hoveredSystem && !isDragging) {
+      const targetDist = 2.0
+      const currentDist = camera.position.length()
+      camera.position.setLength(currentDist + (targetDist - currentDist) * 0.018)
+    } else if (!isDragging) {
+      const currentDist = camera.position.length()
+      camera.position.setLength(currentDist + (3.0 - currentDist) * 0.04)
+    }
+
+    // Story fragment label + audio swell on hover
+    if (hoveredSystem && !isDragging) {
+      if (activeAudio) activeAudio.setVolume?.(0.8)
       tempVec.copy(hoveredSystem.localPos).applyMatrix4(galaxy.matrixWorld)
       tempVec.project(camera)
       const sx = (tempVec.x * 0.5 + 0.5) * window.innerWidth
@@ -802,12 +1049,19 @@ function animate(t: number) {
       label.style.top = `${sy - 8}px`
       label.style.color = hex
       label.style.textShadow = `0 0 10px ${hex}, 0 0 22px ${hex}88`
-      label.textContent = 'Start here?'
+      label.textContent = SYSTEM_STORIES[hoveredSystem.id % SYSTEM_STORIES.length]
       renderer.domElement.style.cursor = 'pointer'
     } else {
+      if (activeAudio) activeAudio.setVolume?.(0.4)
       label.style.display = 'none'
       renderer.domElement.style.cursor = isDragging ? 'grabbing' : 'grab'
     }
+
+    // Update galaxy phenomena
+    for (const key of Object.keys(galaxyPhenomenaInstances) as GalaxyPhenomenonKey[]) {
+      galaxyPhenomenaInstances[key]?.update(dt)
+    }
+    tickRandomOddness(dt)
 
   } else if (state === 'zooming-in') {
     zoomT = Math.min(zoomT + dt / 1.4, 1)
@@ -927,6 +1181,16 @@ function animate(t: number) {
     camera.position.copy(solarCamPos())
     camera.lookAt(0, 0, 0)
     renderer.domElement.style.cursor = isDragging ? 'grabbing' : 'grab'
+
+    // Zoom-out prompt: fade in when close to max distance
+    const zoomFraction = (solarCamDist - SOLAR_CAM_DIST_MAX * 0.78) / (SOLAR_CAM_DIST_MAX * 0.22)
+    const promptOpacity = Math.max(0, Math.min(1, zoomFraction))
+    if (promptOpacity > 0.01) {
+      zoomOutPrompt.style.display = 'block'
+      zoomOutPrompt.style.color = `rgba(255,255,255,${promptOpacity * 0.45})`
+    } else {
+      zoomOutPrompt.style.display = 'none'
+    }
 
     // Update active phenomena
     for (const key of Object.keys(phenomenaInstances) as PhenomenonKey[]) {
