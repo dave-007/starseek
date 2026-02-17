@@ -99,6 +99,7 @@ export class PlanetView {
 
   private flashPhase = 0
   private flashColor = new THREE.Color()
+  private _failCooldown = 0    // brief immunity after a fail (prevents drag multi-fail)
 
   readonly zones: ResonanceZone[] = []
 
@@ -189,6 +190,7 @@ export class PlanetView {
    */
   paint(cellIdx: number, element: ElementKey) {
     if (this.paused || this._outcome !== 'playing' || !this.challenge.length) return
+    if (this._failCooldown > 0) return   // brief immunity after a fail
     const step    = this.challenge[this._stepIdx]
     const cellZi  = this.cellZone[cellIdx]
 
@@ -269,9 +271,10 @@ export class PlanetView {
     }
 
     if (this.paused || this._outcome !== 'playing') return
-    this._timePlaying += dt
-    this._failFlash    = Math.max(0, this._failFlash - dt * 3)
-    this._successFlash = Math.max(0, this._successFlash - dt * 3)
+    this._timePlaying  += dt
+    this._failFlash     = Math.max(0, this._failFlash - dt * 3)
+    this._successFlash  = Math.max(0, this._successFlash - dt * 3)
+    this._failCooldown  = Math.max(0, this._failCooldown - dt)
 
     // Challenge timer
     if (this.challenge.length > 0) {
@@ -286,8 +289,8 @@ export class PlanetView {
 
     this._paintSurface(this._timePlaying)
 
-    // Lose condition: gave it a real try but attunement collapsed
-    if (this._attunement <= 0 && this._completedCount === 0 && this._timePlaying > 30) {
+    // Lose condition: attunement collapsed after playing for a while
+    if (this._attunement <= 0 && this._timePlaying > 20) {
       this._outcome = 'lost'
     }
   }
@@ -306,7 +309,7 @@ export class PlanetView {
     }
     if (zi >= 0) {
       const ec = ELEMENT_COLORS[this.zones[zi].element]
-      return { r: ec.r * 0.06, g: ec.g * 0.06, b: ec.b * 0.06 }
+      return { r: ec.r * 0.10, g: ec.g * 0.10, b: ec.b * 0.10 }
     }
     const { r, g, b } = this.color
     return { r: r * 0.03, g: g * 0.03, b: b * 0.03 }
@@ -353,7 +356,7 @@ export class PlanetView {
 
       // Gentle pulse on faint zone hints (not active zone)
       if (zi >= 0 && zi !== activeZone && !this.zones[zi].filled && this.cellEl[i] === null) {
-        const hint = 0.055 + Math.sin(t * 1.8 + i * 0.05) * 0.018
+        const hint = 0.08 + Math.sin(t * 1.8 + i * 0.05) * 0.03
         const ec   = ELEMENT_COLORS[this.zones[zi].element]
         r = ec.r * hint; g = ec.g * hint; b = ec.b * hint
       }
@@ -391,14 +394,15 @@ export class PlanetView {
       }
     } else {
       // More steps to go — reset timer for next step
-      this._stepTimer = this._timePerStep + this._tempBonus(this.challenge[this._stepIdx].element)
+      this._stepTimer = Math.max(2.0, this._timePerStep + this._tempBonus(this.challenge[this._stepIdx].element))
     }
   }
 
   /** Called when the player makes a wrong move. */
   private _failChallenge() {
-    this._attunement = Math.max(0, this._attunement - 0.07)
-    this._failFlash  = 1.0
+    this._attunement  = Math.max(0, this._attunement - 0.07)
+    this._failFlash   = 1.0
+    this._failCooldown = 0.6   // brief drag immunity
     this._generateChallenge()
   }
 
@@ -440,7 +444,7 @@ export class PlanetView {
     }))
 
     this._stepIdx  = 0
-    this._stepTimer = this._timePerStep + this._tempBonus(this.challenge[0].element)
+    this._stepTimer = Math.max(2.0, this._timePerStep + this._tempBonus(this.challenge[0].element))
   }
 
   /** Narrative text for a failed planet. */
