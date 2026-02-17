@@ -4,6 +4,10 @@ import { unlockAudio, SystemLoop } from './audio'
 import { buildHexSphere } from './hexsphere'
 import { SolarSystem } from './solarsystem'
 import { PlanetView, DEFAULT_MIX, ElementMix, ElementKey, SEED_EVENTS, SeedEvent, ELEMENT_COLORS } from './planetview'
+import {
+  type Phenomenon, type PhenomenonKey,
+  createRadio, createUFO, createComet, createCityLights, createFormation, createAnomaly
+} from './phenomena'
 
 // ---------------------------------------------------------------------------
 // Renderer & Scene
@@ -181,6 +185,102 @@ let activeCorner = -1   // which corner is currently lit (-1 = none)
 let mouseScreenX = 0, mouseScreenY = 0
 
 // ---------------------------------------------------------------------------
+// Phenomena — toggleable solar system animations
+// ---------------------------------------------------------------------------
+const PHENOMENON_DEFS: { key: PhenomenonKey; label: string }[] = [
+  { key: 'radio',     label: 'Radio Signals'  },
+  { key: 'ufo',       label: 'UFO Scout'      },
+  { key: 'comet',     label: 'Comet'          },
+  { key: 'lights',    label: 'City Lights'    },
+  { key: 'formation', label: 'Formation'      },
+  { key: 'anomaly',   label: 'Anomaly'        },
+]
+
+const phenomenaActive: Partial<Record<PhenomenonKey, boolean>> = {}
+const phenomenaInstances: Partial<Record<PhenomenonKey, Phenomenon>> = {}
+PHENOMENON_DEFS.forEach(d => { phenomenaActive[d.key] = false })
+
+// Left-side toggle panel — only visible in solar-system state
+const phenomenaPanel = document.createElement('div')
+phenomenaPanel.style.cssText = `
+  position:fixed; left:18px; top:50%; transform:translateY(-50%);
+  display:none; flex-direction:column; gap:6px;
+`
+document.body.appendChild(phenomenaPanel)
+
+const phenomenaBtns: Partial<Record<PhenomenonKey, HTMLElement>> = {}
+PHENOMENON_DEFS.forEach(({ key, label }) => {
+  const btn = document.createElement('div')
+  btn.style.cssText = `
+    font-family:'Courier New',monospace; font-size:10px; letter-spacing:.1em;
+    color:rgba(255,255,255,0.3); cursor:pointer; user-select:none;
+    transition:color .15s; white-space:nowrap; padding:2px 0;
+  `
+  btn.textContent = `○ ${label}`
+  btn.addEventListener('click', () => togglePhenomenon(key))
+  phenomenaPanel.appendChild(btn)
+  phenomenaBtns[key] = btn
+})
+
+function togglePhenomenon(key: PhenomenonKey) {
+  const wasOn = phenomenaActive[key]
+  phenomenaActive[key] = !wasOn
+
+  if (wasOn) {
+    // Turn off: remove from scene
+    const inst = phenomenaInstances[key]
+    if (inst) { solarSystem?.group ? scene.remove(inst.group) : null; inst.dispose(); delete phenomenaInstances[key] }
+    // Also remove from solar system group if it was added there
+    const existing = phenomenaInstances[key]
+    if (existing && solarSystem) { scene.remove(existing.group) }
+  } else {
+    // Turn on: create and add to scene
+    spawnPhenomenon(key)
+  }
+  updatePhenomenaUI()
+}
+
+function spawnPhenomenon(key: PhenomenonKey) {
+  if (!solarSystem) return
+  const seed = (selectedSystem?.audioSeed ?? 0) + key.charCodeAt(0)
+  let inst: Phenomenon | null = null
+  switch (key) {
+    case 'radio':     inst = createRadio(solarSystem.planetInfos); break
+    case 'ufo':       inst = createUFO(seed, solarSystem.planetInfos); break
+    case 'comet':     inst = createComet(seed); break
+    case 'lights':    inst = createCityLights(seed, solarSystem.planetInfos); break
+    case 'formation': inst = createFormation(seed); break
+    case 'anomaly':   inst = createAnomaly(seed); break
+  }
+  if (inst) {
+    scene.add(inst.group)
+    // Apply solar system's tilt so phenomena align with the system plane
+    inst.group.rotation.copy(solarSystem.group.rotation)
+    phenomenaInstances[key] = inst
+  }
+}
+
+function updatePhenomenaUI() {
+  for (const { key } of PHENOMENON_DEFS) {
+    const on  = phenomenaActive[key]
+    const btn = phenomenaBtns[key]
+    if (!btn) continue
+    const label = PHENOMENON_DEFS.find(d => d.key === key)!.label
+    btn.textContent = `${on ? '●' : '○'} ${label}`
+    btn.style.color = on ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.3)'
+  }
+}
+
+function teardownAllPhenomena() {
+  for (const key of Object.keys(phenomenaInstances) as PhenomenonKey[]) {
+    const inst = phenomenaInstances[key]
+    if (inst) { scene.remove(inst.group); inst.dispose(); delete phenomenaInstances[key] }
+  }
+  PHENOMENON_DEFS.forEach(d => { phenomenaActive[d.key] = false })
+  updatePhenomenaUI()
+}
+
+// ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 type AppState = 'galaxy' | 'zooming-in' | 'solar-system' | 'zooming-out' | 'planet'
@@ -242,6 +342,7 @@ function enterSolarSystem() {
   camera.lookAt(0, 0, 0)
   state = 'solar-system'
   overlay.style.opacity = '0'
+  phenomenaPanel.style.display = 'flex'
 }
 
 function goBack() {
@@ -249,6 +350,8 @@ function goBack() {
   cornerEls.forEach(el => { el.style.display = 'none' })
   thoughtBubble.style.display = 'none'
   label.style.display = 'none'
+  phenomenaPanel.style.display = 'none'
+  teardownAllPhenomena()
   overlay.style.opacity = '1'
   setTimeout(() => {
     if (activeAudio) { activeAudio.stop(); activeAudio = null }
@@ -383,6 +486,7 @@ function enterPlanet(idx: number) {
   currentPlanetIdx = idx
   thoughtBubble.style.display = 'none'
   label.style.display = 'none'
+  phenomenaPanel.style.display = 'none'
   overlay.style.opacity = '1'
   setTimeout(() => {
     if (solarSystem) solarSystem.group.visible = false
@@ -504,6 +608,7 @@ function exitPlanet() {
     camera.position.copy(solarCamPos())
     camera.lookAt(0, 0, 0)
     state = 'solar-system'
+    phenomenaPanel.style.display = 'flex'
     overlay.style.opacity = '0'
   }, 420)
 }
@@ -807,6 +912,11 @@ function animate(t: number) {
     camera.position.copy(solarCamPos())
     camera.lookAt(0, 0, 0)
     renderer.domElement.style.cursor = isDragging ? 'grabbing' : 'grab'
+
+    // Update active phenomena
+    for (const key of Object.keys(phenomenaInstances) as PhenomenonKey[]) {
+      phenomenaInstances[key]?.update(dt, solarSystem?.planetInfos ?? [])
+    }
 
   } else if (state === 'planet') {
     planetView?.update(dt)
