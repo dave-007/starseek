@@ -9,21 +9,21 @@ const KEYS: ElementKey[] = ['fire', 'water', 'earth', 'air']
 export type SeedEventKey = 'meteor' | 'solar_storm' | 'volcano' | 'tidal_wave' | 'ice_age' | 'lightning'
 
 export interface SeedEvent {
-  key: SeedEventKey
-  label: string
-  emoji: string
-  flashColor: THREE.Color
-  seeds: number
-  seedElement: ElementKey
+  key:          SeedEventKey
+  label:        string
+  emoji:        string
+  flashColor:   THREE.Color
+  preFill:      number          // zones pre-filled by this event (0-2)
+  preFillEl:    ElementKey      // element used for pre-fill
 }
 
 export const SEED_EVENTS: SeedEvent[] = [
-  { key: 'meteor',      label: 'Meteor Strike',   emoji: '☄',  flashColor: new THREE.Color(0xff8844), seeds: 4, seedElement: 'fire'  },
-  { key: 'solar_storm', label: 'Solar Storm',     emoji: '☀',  flashColor: new THREE.Color(0xffdd44), seeds: 1, seedElement: 'fire'  },
-  { key: 'volcano',     label: 'Volcano',         emoji: '🌋', flashColor: new THREE.Color(0xff4400), seeds: 2, seedElement: 'earth' },
-  { key: 'tidal_wave',  label: 'Tidal Wave',      emoji: '🌊', flashColor: new THREE.Color(0x0088ff), seeds: 3, seedElement: 'water' },
-  { key: 'ice_age',     label: 'Ice Age',         emoji: '❄',  flashColor: new THREE.Color(0x88ccff), seeds: 1, seedElement: 'air'   },
-  { key: 'lightning',   label: 'Lightning Storm', emoji: '⚡', flashColor: new THREE.Color(0xeeeeff), seeds: 6, seedElement: 'air'   },
+  { key: 'meteor',      label: 'Meteor Strike',   emoji: '☄',  flashColor: new THREE.Color(0xff8844), preFill: 1, preFillEl: 'fire'  },
+  { key: 'solar_storm', label: 'Solar Storm',     emoji: '☀',  flashColor: new THREE.Color(0xffdd44), preFill: 0, preFillEl: 'fire'  },
+  { key: 'volcano',     label: 'Volcano',         emoji: '🌋', flashColor: new THREE.Color(0xff4400), preFill: 1, preFillEl: 'earth' },
+  { key: 'tidal_wave',  label: 'Tidal Wave',      emoji: '🌊', flashColor: new THREE.Color(0x0088ff), preFill: 1, preFillEl: 'water' },
+  { key: 'ice_age',     label: 'Ice Age',         emoji: '❄',  flashColor: new THREE.Color(0x88ccff), preFill: 1, preFillEl: 'air'   },
+  { key: 'lightning',   label: 'Lightning Storm', emoji: '⚡', flashColor: new THREE.Color(0xeeeeff), preFill: 2, preFillEl: 'air'   },
 ]
 
 export const ELEMENT_COLORS: Record<ElementKey, THREE.Color> = {
@@ -33,161 +33,145 @@ export const ELEMENT_COLORS: Record<ElementKey, THREE.Color> = {
   air:   new THREE.Color(0x88bbff),
 }
 
-// How each element spreads
-const ELEMENT_SPREAD_RATE: Record<ElementKey, number> = { fire: 3.2, water: 0.75, earth: 0.5, air: 1.8 }
-// How naturally each element "takes hold" (conflicts with others slow it)
-const ELEMENT_HARMONY: Record<ElementKey, Record<ElementKey, number>> = {
-  fire:  { fire: 1.0, water: 0.1, earth: 0.6, air: 0.7 },
-  water: { fire: 0.1, water: 1.0, earth: 0.7, air: 0.6 },
-  earth: { fire: 0.5, water: 0.6, earth: 1.0, air: 0.4 },
-  air:   { fire: 0.6, water: 0.5, earth: 0.3, air: 1.0 },
-}
+const ELEMENT_EMOJI: Record<ElementKey, string> = { fire: '🔥', water: '💧', earth: '🌿', air: '🌀' }
+export { ELEMENT_EMOJI }
 
 function makePRNG(seed: number) {
   let s = ((seed ^ 0xdeadbeef) >>> 0) || 1
   return () => { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return (s >>> 0) / 0xffffffff }
 }
 
-interface CellState {
-  phase:    number          // 0 = dark, 1 = fully lit
-  queued:   boolean
-  element:  ElementKey | null
-}
-
-/** A resonance zone: cluster of cells wanting a specific element */
+/** A resonance zone: BFS blob of cells wanting a specific element */
 export interface ResonanceZone {
   cells:   number[]
   element: ElementKey
-  /** 0–1: fraction of zone cells correctly painted */
-  score:   number
+  filled:  boolean      // true once correctly attuned by the player
+}
+
+/** One step in a challenge: paint the given zone with the given element */
+export interface ChallengeStep {
+  zoneIdx: number
+  element: ElementKey
+}
+
+/** Snapshot of the live challenge state for the HUD */
+export interface ChallengeDisplay {
+  steps:          ChallengeStep[]
+  stepIdx:        number     // which step is active (0-based)
+  stepTimer:      number     // seconds remaining on this step
+  timePerStep:    number     // total seconds allowed per step
+  completedCount: number     // successful pattern completions so far
+  attunement:     number     // 0–1
+  failFlash:      number     // >0 while fail animation plays
+  successFlash:   number     // >0 while success animation plays
 }
 
 export type PlanetOutcome = 'playing' | 'won' | 'lost'
 
 export class PlanetView {
-  readonly group      = new THREE.Group()
-  readonly cellCount:   number
-  readonly cellCentroids: THREE.Vector3[]  // unit-sphere positions, for hit-testing
-  readonly resonance:   ElementMix         // planet's hidden preferred mix
-  readonly tempNorm:    number             // 0 = frozen, 1 = inferno
+  readonly group        = new THREE.Group()
+  readonly cellCount:     number
+  readonly cellCentroids: THREE.Vector3[]
+  readonly tempNorm:      number
 
-  private adj:      number[][]
-  private setCell:  (i: number, r: number, g: number, b: number) => void
-  private flush:    () => void
-  private cells:    CellState[]
-  private frontier: number[]
-  private color:    THREE.Color
-  private spreadAccum = 0
-  private topCell:    number
-  private paused  = true
+  private adj:       number[][]
+  private setCell:   (i: number, r: number, g: number, b: number) => void
+  private flush:     () => void
+  private cellZone:  Int16Array  // zone index per cell, -1 = no zone
+  private color:     THREE.Color
+  private paused     = true
+
+  // Cell paint state — element currently painted on each cell (null = bare)
+  private cellEl: (ElementKey | null)[]
+
+  // Challenge state
+  private challenge:      ChallengeStep[] = []
+  private _stepIdx        = 0
+  private _stepTimer      = 0
+  private _timePerStep    = 8
+  private _completedCount = 0
+  private _attunement     = 0
+  private _failFlash      = 0
+  private _successFlash   = 0
+  private _timePlaying    = 0
+  private _lifeTime       = 0
+  private _outcome:       PlanetOutcome = 'playing'
 
   private flashPhase = 0
   private flashColor = new THREE.Color()
 
-  private _outcome:       PlanetOutcome = 'playing'
-  private _litFraction    = 0
-  private timePlaying     = 0
-  private lifeTime        = 0       // counts up after winning for life animation
-
-  /** Resonance zones — visible to main.ts for HUD */
   readonly zones: ResonanceZone[] = []
-  private cellZone: Int16Array     // zone index per cell, -1 = no zone
 
+  // ── Constructor ──────────────────────────────────────────────────────────
   constructor(seed: number, color: THREE.Color, tempNorm: number = 0.5) {
     this.tempNorm = tempNorm
-    this.color = color.clone()
-    const surface = buildSurfaceMesh(4, 1.0)
+    this.color    = color.clone()
+
+    const surface       = buildSurfaceMesh(4, 1.0)
     this.group.add(surface.mesh)
-    this.cellCount = surface.cellCount
-    this.adj       = surface.adj
-    this.setCell   = surface.setCell
-    this.flush     = surface.flush
-    this.topCell   = surface.topCell
-    this.cellCentroids = surface.cellCentroids
+    this.cellCount      = surface.cellCount
+    this.adj            = surface.adj
+    this.setCell        = surface.setCell
+    this.flush          = surface.flush
+    this.cellCentroids  = surface.cellCentroids
+    this.cellZone       = new Int16Array(this.cellCount).fill(-1)
+    this.cellEl         = new Array(this.cellCount).fill(null)
 
-    // Derive resonance from seed
-    const rand = makePRNG(seed ^ 0xface)
-    const raw = KEYS.map(() => rand() ** 1.5)
-    const total = raw.reduce((a, b) => a + b, 0)
-    this.resonance = KEYS.reduce((o, k, i) => { o[k] = raw[i] / total; return o }, {} as ElementMix)
-
-    // Start dark and paused
-    this.cells    = Array.from({ length: this.cellCount }, () => ({ phase: 0, queued: false, element: null }))
-    this.frontier = []
-    this.cellZone = new Int16Array(this.cellCount).fill(-1)
-
-    // ── Generate resonance zones ──────────────────────────────────────────────
-    // Zones are blobs / polar caps / equatorial bands — visible as faint hints
-    const zrand   = makePRNG(seed ^ 0x1234abcd)
+    // Generate resonance zones via seeded BFS
+    const zrand     = makePRNG(seed ^ 0x1234abcd)
     const zoneCount = 4 + Math.floor(zrand() * 3)   // 4–6 zones
-
-    // Zone shapes: pick a center cell, BFS-expand to N cells
     const ZONE_SIZE = Math.floor(this.cellCount / (zoneCount * 2.2))
+
     for (let z = 0; z < zoneCount; z++) {
-      const centerCell = Math.floor(zrand() * this.cellCount)
+      const center   = Math.floor(zrand() * this.cellCount)
       const el: ElementKey = KEYS[Math.floor(zrand() * 4)]
-      const visited  = new Set<number>([centerCell])
-      const frontier = [centerCell]
-      while (visited.size < ZONE_SIZE && frontier.length) {
-        const ci = frontier.splice(Math.floor(zrand() * frontier.length), 1)[0]
+      const visited  = new Set<number>([center])
+      const front    = [center]
+      while (visited.size < ZONE_SIZE && front.length) {
+        const ci = front.splice(Math.floor(zrand() * front.length), 1)[0]
         for (const ni of this.adj[ci]) {
           if (!visited.has(ni) && this.cellZone[ni] === -1) {
-            visited.add(ni); this.cellZone[ni] = z; frontier.push(ni)
+            visited.add(ni); this.cellZone[ni] = z; front.push(ni)
           }
         }
         this.cellZone[ci] = z
       }
-      this.zones.push({ cells: [...visited], element: el, score: 0 })
+      this.zones.push({ cells: [...visited], element: el, filled: false })
     }
 
-    // Paint initial cell colors: zone cells show faint hint, others very dark
-    const { r, g, b } = color
-    for (let i = 0; i < this.cellCount; i++) {
-      const zi = this.cellZone[i]
-      if (zi >= 0) {
-        const ec = ELEMENT_COLORS[this.zones[zi].element]
-        surface.setCell(i, ec.r * 0.07, ec.g * 0.07, ec.b * 0.07)
-      } else {
-        surface.setCell(i, r * 0.03, g * 0.03, b * 0.03)
-      }
-    }
-    surface.flush()
-
+    // Paint initial hints
+    this._paintSurface(0)
     this.group.add(new THREE.AmbientLight(0x111133, 1))
   }
 
-  get outcome():        PlanetOutcome { return this._outcome }
-  get litFraction():    number        { return this._litFraction }
-  get zoneAttunement(): number {
-    if (!this.zones.length) return 0
-    return this.zones.reduce((s, z) => s + z.score, 0) / this.zones.length
-  }
+  // ── Getters ──────────────────────────────────────────────────────────────
+  get outcome():     PlanetOutcome { return this._outcome }
+  get attunement():  number        { return this._attunement }
 
-  /** Element mix computed from what's actually painted on the planet */
-  get currentMix(): ElementMix {
-    const counts: Record<ElementKey, number> = { fire: 0, water: 0, earth: 0, air: 0 }
-    let total = 0
-    for (const c of this.cells) {
-      if (c.element && c.phase > 0.1) { counts[c.element]++; total++ }
+  /** Challenge data for the HUD — null while paused */
+  get challengeDisplay(): ChallengeDisplay | null {
+    if (this.paused || this._outcome !== 'playing') return null
+    return {
+      steps:          this.challenge,
+      stepIdx:        this._stepIdx,
+      stepTimer:      this._stepTimer,
+      timePerStep:    this._timePerStep,
+      completedCount: this._completedCount,
+      attunement:     this._attunement,
+      failFlash:      this._failFlash,
+      successFlash:   this._successFlash,
     }
-    if (total === 0) return { ...DEFAULT_MIX }
-    return KEYS.reduce((o, k) => { o[k] = counts[k] / total; return o }, {} as ElementMix)
   }
 
-  /** Match score of current painted mix vs resonance (0 = terrible, 1 = perfect) */
-  get matchScore(): number {
-    const mix = this.currentMix
-    const dot  = KEYS.reduce((acc, k) => acc + mix[k] * this.resonance[k], 0)
-    return Math.max(0, Math.min(1, (dot - 0.25) / 0.75))
+  /** The element required right now — for highlighting the element picker */
+  get requiredElement(): ElementKey | null {
+    if (this.paused || this._outcome !== 'playing' || !this.challenge.length) return null
+    return this.challenge[this._stepIdx]?.element ?? null
   }
 
-  get dominantElement(): ElementKey {
-    return KEYS.reduce((best, k) => this.resonance[k] > this.resonance[best] ? k : best, KEYS[0])
-  }
-
-  /** Find nearest cell to a point in world-space (accounts for group rotation). */
+  // ── Paint ─────────────────────────────────────────────────────────────────
+  /** Find nearest cell to a world-space hit point (accounts for group rotation). */
   nearestCell(worldPoint: THREE.Vector3): number {
-    // Transform hit point into the group's local space so rotation is accounted for
     const local = this.group.worldToLocal(worldPoint.clone()).normalize()
     let best = 0, bestDot = -Infinity
     for (let i = 0; i < this.cellCount; i++) {
@@ -197,94 +181,87 @@ export class PlanetView {
     return best
   }
 
-  /** Paint a cell with an element — starts a spread wave from that point. */
+  /**
+   * Called when player paints cell `cellIdx` with `element`.
+   * - Correct zone + correct element → advance challenge step
+   * - Zone cell with wrong element → fail the challenge
+   * - Non-zone cell → neutral (no penalty, lets player spin/look around)
+   */
   paint(cellIdx: number, element: ElementKey) {
-    if (this.paused || this._outcome !== 'playing') return
-    const c = this.cells[cellIdx]
-    if (c.queued && c.element === element) return  // already this element, no-op
-    c.element = element
-    if (!c.queued) {
-      c.queued = true
-      c.phase  = 0.01
-      this.frontier.push(cellIdx)
+    if (this.paused || this._outcome !== 'playing' || !this.challenge.length) return
+    const step    = this.challenge[this._stepIdx]
+    const cellZi  = this.cellZone[cellIdx]
+
+    if (cellZi === step.zoneIdx) {
+      // Painting in the target zone
+      if (element === step.element) {
+        this._advanceStep()
+      } else {
+        // Wrong element in the right zone — interrupt
+        this._failChallenge()
+      }
+    } else if (cellZi >= 0 && !this.zones[cellZi].filled) {
+      // Painting in a different unfilled zone — interrupt
+      this._failChallenge()
     }
+    // Painting on bare ground or already-filled zone is neutral
   }
 
-  /** Start from a seeding event. */
+  // ── Reset (called from event picker) ─────────────────────────────────────
   reset(event: SeedEvent) {
-    this._outcome    = 'playing'
-    this.timePlaying = 0
-    this.spreadAccum = 0
-
-    this.cells    = Array.from({ length: this.cellCount }, () => ({ phase: 0, queued: false, element: null }))
-    this.frontier = []
+    this._outcome      = 'playing'
+    this._timePlaying  = 0
+    this._attunement   = 0
+    this._completedCount = 0
+    this._failFlash    = 0
+    this._successFlash = 0
+    this.cellEl.fill(null)
+    for (const z of this.zones) z.filled = false
 
     this.flashColor.copy(event.flashColor)
     this.flashPhase = 1.0
 
-    const step = Math.floor(this.cellCount / event.seeds)
-    for (let s = 0; s < event.seeds; s++) {
-      const si = (this.topCell + s * step) % this.cellCount
-      this.cells[si].phase   = 0.01
-      this.cells[si].queued  = true
-      this.cells[si].element = event.seedElement
-      this.frontier.push(si)
+    // Pre-fill zones from the seeding event (gives a head-start)
+    const eligibleZones = this.zones
+      .map((z, i) => ({ z, i }))
+      .filter(({ z }) => z.element === event.preFillEl || event.preFill > 0)
+    for (let p = 0; p < Math.min(event.preFill, this.zones.length); p++) {
+      const pick = eligibleZones[p] ?? { z: this.zones[p], i: p }
+      this._fillZone(pick.i, pick.z.element)
     }
 
-    // Reset zone scores
-    for (const z of this.zones) z.score = 0
-
-    // Repaint with zone hints visible
-    const { r, g, b } = this.color
-    for (let i = 0; i < this.cellCount; i++) {
-      const zi = this.cellZone[i]
-      if (zi >= 0) {
-        const ec = ELEMENT_COLORS[this.zones[zi].element]
-        this.setCell(i, ec.r * 0.07, ec.g * 0.07, ec.b * 0.07)
-      } else {
-        this.setCell(i, r * 0.03, g * 0.03, b * 0.03)
-      }
-    }
-    this.flush()
-    this.lifeTime = 0
     this.paused = false
+    this._generateChallenge()
   }
 
+  // ── Update ────────────────────────────────────────────────────────────────
   update(dt: number) {
-    // Flash overrides everything briefly
     if (this.flashPhase > 0) {
       this.flashPhase = Math.max(0, this.flashPhase - dt * 2.2)
       const fp = this.flashPhase
       const { r: fr, g: fg, b: fb } = this.flashColor
-      const { r, g, b } = this.color
       for (let i = 0; i < this.cellCount; i++) {
-        const t = this.cells[i].phase
-        const base = t * 0.9 + 0.03
-        this.setCell(i, r * base * (1 - fp) + fr * fp, g * base * (1 - fp) + fg * fp, b * base * (1 - fp) + fb * fp)
+        const { r, g, b } = this._cellBaseColor(i)
+        this.setCell(i, r * (1 - fp) + fr * fp, g * (1 - fp) + fg * fp, b * (1 - fp) + fb * fp)
       }
       this.flush()
       return
     }
 
-    // Life emergence animation after winning
     if (this._outcome === 'won') {
-      this.lifeTime += dt
-      const lt = this.lifeTime
-      const { r: pr, g: pg, b: pb } = this.color
+      this._lifeTime += dt
+      const lt = this._lifeTime
       for (let i = 0; i < this.cellCount; i++) {
-        const t = this.cells[i].phase
-        if (t <= 0) continue
-        // Wave of green life spreading from top
         const cent = this.cellCentroids[i]
         const wave = Math.max(0, Math.min(1, (lt * 0.6 - (1 - cent.y) * 0.5)))
         const pulse = 0.8 + Math.sin(lt * 3.0 + i * 0.04) * 0.2
-        const el = this.cells[i].element ?? 'earth'
+        const zi = this.cellZone[i]
+        const el = (zi >= 0 ? this.zones[zi].element : null) ?? 'earth'
         const ec = ELEMENT_COLORS[el]
-        // Blend toward organic green
         this.setCell(i,
-          (ec.r * (1 - wave) + 0.1 * wave) * pulse * t,
-          (ec.g * (1 - wave) + 0.75 * wave) * pulse * t,
-          (ec.b * (1 - wave) + 0.2 * wave) * pulse * t,
+          (ec.r * (1 - wave) + 0.1 * wave) * pulse,
+          (ec.g * (1 - wave) + 0.75 * wave) * pulse,
+          (ec.b * (1 - wave) + 0.2 * wave) * pulse,
         )
       }
       this.flush()
@@ -292,119 +269,181 @@ export class PlanetView {
     }
 
     if (this.paused || this._outcome !== 'playing') return
-    this.timePlaying += dt
+    this._timePlaying += dt
+    this._failFlash    = Math.max(0, this._failFlash - dt * 3)
+    this._successFlash = Math.max(0, this._successFlash - dt * 3)
 
-    const { r: pr, g: pg, b: pb } = this.color
-
-    // Recolor ALL cells every frame — unlit zone cells keep their faint hint
-    for (let i = 0; i < this.cellCount; i++) {
-      const c = this.cells[i]
-      if (c.phase <= 0) {
-        // Keep zone hint visible on unlit cells (pulse gently)
-        const zi = this.cellZone[i]
-        if (zi >= 0) {
-          const ec = ELEMENT_COLORS[this.zones[zi].element]
-          const pulse = 0.055 + Math.sin(this.timePlaying * 1.8 + i * 0.05) * 0.018
-          this.setCell(i, ec.r * pulse, ec.g * pulse, ec.b * pulse)
-        }
-        continue
-      }
-      const el = c.element ?? 'earth'
-      const ec = ELEMENT_COLORS[el]
-      const t  = c.phase
-      // Check if painted element matches zone
-      const zi = this.cellZone[i]
-      const correct = zi >= 0 && this.zones[zi].element === el
-      const resonanceBoost = correct ? 1.25 : 0.85
-      const blend = 0.4 + t * 0.5
-      const brightness = t * (0.7 + t * 0.3) * resonanceBoost
-      this.setCell(i,
-        (pr * (1 - blend) + ec.r * blend) * brightness,
-        (pg * (1 - blend) + ec.g * blend) * brightness,
-        (pb * (1 - blend) + ec.b * blend) * brightness,
-      )
-    }
-
-    // Advance frontier
-    const nextFrontier: number[] = []
-    const readyToSpread: number[] = []
-
-    for (const ci of this.frontier) {
-      const el   = this.cells[ci].element ?? 'earth'
-      const rate = ELEMENT_SPREAD_RATE[el]
-      this.cells[ci].phase = Math.min(1, this.cells[ci].phase + dt * rate * 1.6)
-      if (this.cells[ci].phase >= 1) readyToSpread.push(ci)
-      else nextFrontier.push(ci)
-    }
-
-    // Spread to neighbours
-    this.spreadAccum += dt
-    const maxRate = Math.max(...KEYS.map(k => ELEMENT_SPREAD_RATE[k]))
-    const spreadInterval = 0.08 / maxRate
-    if (this.spreadAccum >= spreadInterval) {
-      this.spreadAccum = 0
-      for (const ci of readyToSpread) {
-        const el = this.cells[ci].element ?? 'earth'
-        const rate = ELEMENT_SPREAD_RATE[el]
-        for (const ni of this.adj[ci]) {
-          if (this.cells[ni].queued) continue
-          const existing = this.cells[ni].element
-          const harmony  = existing ? ELEMENT_HARMONY[el][existing] : 1.0
-          // Probability of spreading — element harmony and resonance match both matter
-          const resMul = 0.5 + this.resonance[el]
-          if (Math.random() > harmony * resMul * (rate / maxRate)) continue
-          this.cells[ni].queued  = true
-          this.cells[ni].phase   = 0.01
-          this.cells[ni].element = el
-          nextFrontier.push(ni)
-        }
-      }
-    } else {
-      nextFrontier.push(...readyToSpread)
-    }
-
-    this.frontier = nextFrontier
-
-    // Thermal pressure — hot worlds evaporate non-fire; cold worlds freeze out fire
-    if (this.tempNorm > 0.65 || this.tempNorm < 0.35) {
-      const isHot    = this.tempNorm > 0.65
-      const pressure = isHot ? (this.tempNorm - 0.65) / 0.35 : (0.35 - this.tempNorm) / 0.35
-      const tickChance = pressure * 0.005 * dt * 60
-      for (let i = 0; i < this.cellCount; i++) {
-        const c = this.cells[i]
-        if (c.phase < 0.3 || !c.element) continue
-        const shouldDrain = isHot ? c.element !== 'fire' : c.element === 'fire'
-        if (shouldDrain && Math.random() < tickChance) {
-          c.phase = Math.max(0, c.phase - 0.18)
-          if (c.phase <= 0) { c.queued = false; c.element = null }
-        }
+    // Challenge timer
+    if (this.challenge.length > 0) {
+      this._stepTimer -= dt
+      if (this._stepTimer <= 0) {
+        // Time ran out — interrupt
+        this._attunement = Math.max(0, this._attunement - 0.05)
+        this._failFlash  = 1.0
+        this._generateChallenge()
       }
     }
 
-    this.flush()
+    this._paintSurface(this._timePlaying)
 
-    // Zone scores + lit fraction + outcome
-    let litCount = 0
-    for (let i = 0; i < this.cellCount; i++) if (this.cells[i].phase > 0.5) litCount++
-    this._litFraction = litCount / this.cellCount
-
-    let totalZoneScore = 0
-    for (const zone of this.zones) {
-      let correct = 0
-      for (const ci of zone.cells) {
-        if (this.cells[ci].phase > 0.5 && this.cells[ci].element === zone.element) correct++
-      }
-      zone.score = zone.cells.length > 0 ? correct / zone.cells.length : 0
-      totalZoneScore += zone.score
+    // Lose condition: gave it a real try but attunement collapsed
+    if (this._attunement <= 0 && this._completedCount === 0 && this._timePlaying > 30) {
+      this._outcome = 'lost'
     }
-    const zoneAttunement = this.zones.length > 0 ? totalZoneScore / this.zones.length : 0
-
-    // Win: covered enough AND zones mostly correct
-    if (this._litFraction >= 0.72 && zoneAttunement >= 0.68) this._outcome = 'won'
-    else if (this.frontier.length === 0 && this._litFraction < 0.22 && this.timePlaying > 5) this._outcome = 'lost'
   }
 
-  /** Eons text for failed-attunement narrative */
+  // ── Private helpers ───────────────────────────────────────────────────────
+
+  /** Returns the baseline RGB for a cell (used for surface painting & flash blending). */
+  private _cellBaseColor(i: number): { r: number; g: number; b: number } {
+    const zi  = this.cellZone[i]
+    const el  = this.cellEl[i]
+
+    if (el !== null) {
+      // Painted from a successful fill
+      const ec = ELEMENT_COLORS[el]
+      return { r: ec.r * 0.45, g: ec.g * 0.45, b: ec.b * 0.45 }
+    }
+    if (zi >= 0) {
+      const ec = ELEMENT_COLORS[this.zones[zi].element]
+      return { r: ec.r * 0.06, g: ec.g * 0.06, b: ec.b * 0.06 }
+    }
+    const { r, g, b } = this.color
+    return { r: r * 0.03, g: g * 0.03, b: b * 0.03 }
+  }
+
+  /** Full surface repaint each frame. */
+  private _paintSurface(t: number) {
+    const activeZone    = this.challenge.length > 0 ? this.challenge[this._stepIdx]?.zoneIdx ?? -1 : -1
+    const activeEl      = this.challenge.length > 0 ? this.challenge[this._stepIdx]?.element  : null
+    const timerFrac     = this._timePerStep > 0 ? this._stepTimer / this._timePerStep : 0
+    const urgency       = timerFrac < 0.3       // last 30% of time → extra pulse speed
+    const pulseSpeed    = urgency ? 9 : 5
+    const pulse         = 0.65 + Math.sin(t * pulseSpeed) * 0.35
+    const failPulse     = this._failFlash
+    const successPulse  = this._successFlash
+
+    for (let i = 0; i < this.cellCount; i++) {
+      const zi = this.cellZone[i]
+      const base = this._cellBaseColor(i)
+      let { r, g, b } = base
+
+      if (zi === activeZone && activeEl !== null) {
+        // Target zone — bright pulsing highlight
+        const ec = ELEMENT_COLORS[activeEl]
+        const bright = urgency ? pulse * 1.1 : pulse * 0.9
+        r = ec.r * bright
+        g = ec.g * bright
+        b = ec.b * bright
+      }
+
+      // Fail flash: bleed red over target zone
+      if (failPulse > 0 && zi === activeZone) {
+        r = r * (1 - failPulse) + failPulse
+        g = g * (1 - failPulse)
+        b = b * (1 - failPulse)
+      }
+
+      // Success flash: bleed bright white-green over filled zone
+      if (successPulse > 0 && zi >= 0 && this.zones[zi].filled) {
+        r = r * (1 - successPulse) + 0.4 * successPulse
+        g = g * (1 - successPulse) + successPulse
+        b = b * (1 - successPulse) + 0.4 * successPulse
+      }
+
+      // Gentle pulse on faint zone hints (not active zone)
+      if (zi >= 0 && zi !== activeZone && !this.zones[zi].filled && this.cellEl[i] === null) {
+        const hint = 0.055 + Math.sin(t * 1.8 + i * 0.05) * 0.018
+        const ec   = ELEMENT_COLORS[this.zones[zi].element]
+        r = ec.r * hint; g = ec.g * hint; b = ec.b * hint
+      }
+
+      this.setCell(i, r, g, b)
+    }
+    this.flush()
+  }
+
+  /** Fill all cells of a zone with an element (visually and logically). */
+  private _fillZone(zoneIdx: number, element: ElementKey) {
+    for (const ci of this.zones[zoneIdx].cells) {
+      this.cellEl[ci] = element
+    }
+    this.zones[zoneIdx].filled  = true
+    this.zones[zoneIdx].element = element
+  }
+
+  /** Called when the player paints the target zone correctly. */
+  private _advanceStep() {
+    const step = this.challenge[this._stepIdx]
+    this._fillZone(step.zoneIdx, step.element)
+    this._stepIdx++
+
+    if (this._stepIdx >= this.challenge.length) {
+      // Pattern complete!
+      const bonus         = 0.10 + (this.challenge.length - 1) * 0.04
+      this._attunement    = Math.min(1, this._attunement + bonus)
+      this._successFlash  = 1.0
+      this._completedCount++
+      if (this._attunement >= 1.0) {
+        this._outcome = 'won'
+      } else {
+        this._generateChallenge()
+      }
+    } else {
+      // More steps to go — reset timer for next step
+      this._stepTimer = this._timePerStep + this._tempBonus(this.challenge[this._stepIdx].element)
+    }
+  }
+
+  /** Called when the player makes a wrong move. */
+  private _failChallenge() {
+    this._attunement = Math.max(0, this._attunement - 0.07)
+    this._failFlash  = 1.0
+    this._generateChallenge()
+  }
+
+  /**
+   * Hot/cold world time modifier per element.
+   * Hot worlds give fire more time; cold worlds give water/air more time.
+   */
+  private _tempBonus(el: ElementKey): number {
+    if (this.tempNorm > 0.65) {
+      return el === 'fire' ? 2.0 : -1.0
+    }
+    if (this.tempNorm < 0.35) {
+      return (el === 'water' || el === 'air') ? 1.0 : -1.5
+    }
+    return 0
+  }
+
+  /** Generate a new challenge pattern based on current difficulty. */
+  private _generateChallenge() {
+    const n   = this._completedCount
+    // Step count: 1 → 2 → 3 → 4, doubling every 2 completions, capped at 4
+    const stepCount   = Math.min(4, 1 + Math.floor(n / 2))
+    // Time per step: starts at 9s, decreases to min 3s
+    this._timePerStep = Math.max(3.0, 9.0 - n * 0.5)
+
+    // Pick unfilled zones preferentially, fall back to any zone
+    const unfilled = this.zones.map((z, i) => i).filter(i => !this.zones[i].filled)
+    const pool     = unfilled.length >= stepCount ? unfilled : this.zones.map((_, i) => i)
+
+    // Shuffle pool
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]]
+    }
+
+    this.challenge = pool.slice(0, stepCount).map(zi => ({
+      zoneIdx: zi,
+      element: this.zones[zi].element,
+    }))
+
+    this._stepIdx  = 0
+    this._stepTimer = this._timePerStep + this._tempBonus(this.challenge[0].element)
+  }
+
+  /** Narrative text for a failed planet. */
   static randomEonTale(): string {
     const TALES = [
       'ten thousand years of silence passed. then a comet struck and the elements stirred again.',
@@ -418,8 +457,6 @@ export class PlanetView {
     ]
     return TALES[Math.floor(Math.random() * TALES.length)]
   }
-
-  get complete(): boolean { return this._outcome !== 'playing' }
 
   dispose() {
     this.group.traverse(obj => {

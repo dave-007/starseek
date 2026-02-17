@@ -3,7 +3,7 @@ import './style.css'
 import { unlockAudio, SystemLoop } from './audio'
 import { buildHexSphere } from './hexsphere'
 import { SolarSystem } from './solarsystem'
-import { PlanetView, DEFAULT_MIX, ElementMix, ElementKey, SEED_EVENTS, SeedEvent, ELEMENT_COLORS } from './planetview'
+import { PlanetView, ElementKey, SEED_EVENTS, SeedEvent, ELEMENT_COLORS, ELEMENT_EMOJI } from './planetview'
 import {
   type Phenomenon, type PhenomenonKey,
   createRadio, createUFO, createComet, createCityLights, createFormation, createAnomaly,
@@ -624,21 +624,24 @@ ELEMENTS.forEach(({ key, label, color }) => {
 })
 
 function updateElementUI() {
+  const required = planetView?.requiredElement ?? null
   ELEMENTS.forEach(({ key, color }, i) => {
-    const active = selectedElement === key
-    // Subtle resonance hint: · if planet wants more of this element
-    const mix = planetView?.currentMix ?? DEFAULT_MIX
-    const isHinted = planetView && (planetView.resonance[key] - mix[key] > 0.14)
-    const hint = isHinted ? ' ·' : ''
-    elementBtns[i].textContent = `${ELEMENTS[i].label}${hint}`
+    const active   = selectedElement === key
+    const isNeeded = key === required   // currently required by the challenge
+    elementBtns[i].textContent = ELEMENTS[i].label
     if (active) {
-      elementBtns[i].style.background   = `${color}44`
-      elementBtns[i].style.borderColor  = color
-      elementBtns[i].style.boxShadow    = `0 0 14px ${color}88`
+      elementBtns[i].style.background  = `${color}44`
+      elementBtns[i].style.borderColor = color
+      elementBtns[i].style.boxShadow   = `0 0 14px ${color}88`
+    } else if (isNeeded) {
+      // Glow the required element to help the player
+      elementBtns[i].style.background  = `${color}22`
+      elementBtns[i].style.borderColor = `${color}cc`
+      elementBtns[i].style.boxShadow   = `0 0 10px ${color}66`
     } else {
-      elementBtns[i].style.background   = isHinted ? `${color}22` : `${color}0d`
-      elementBtns[i].style.borderColor  = isHinted ? `${color}99` : `${color}44`
-      elementBtns[i].style.boxShadow    = 'none'
+      elementBtns[i].style.background  = `${color}0d`
+      elementBtns[i].style.borderColor = `${color}44`
+      elementBtns[i].style.boxShadow   = 'none'
     }
   })
 }
@@ -794,8 +797,8 @@ document.body.appendChild(restartBtn)
 function applyEvent(ev: SeedEvent) {
   document.getElementById('planet-outcome')?.remove()
   planetView?.reset(ev)
-  // Pre-select the event's seed element so player can immediately start painting
-  selectedElement = ev.seedElement
+  // Pre-select the first required element so the player can immediately start
+  selectedElement = planetView?.requiredElement ?? null
   updateElementUI()
 }
 
@@ -1238,25 +1241,51 @@ function animate(t: number) {
       }
     }
 
-    // Update status bar
+    // Challenge HUD
     if (planetView) {
-      const pct    = Math.round(planetView.litFraction * 100)
-      const att    = planetView.zoneAttunement
-      const bars   = Math.round(att * 10)
-      const resonBar   = '█'.repeat(bars) + '░'.repeat(10 - bars)
-      const attColor   = att > 0.65 ? '#44ff88' : att > 0.35 ? '#ffdd44' : '#ff4422'
-      // Zone breakdown: small colored squares per zone
-      const zoneIcons  = planetView.zones.map(z => {
-        const ec = ELEMENT_COLORS[z.element]
-        const col = '#' + ec.getHexString()
-        const fill = Math.round(z.score * 4)
-        const icon = ['○','◔','◑','◕','●'][fill]
-        return `<span style="color:${col}">${icon}</span>`
-      }).join(' ')
-      planetStatus.innerHTML =
-        `${zoneIcons}&nbsp;&nbsp;` +
-        `coverage <span style="color:#aaa">${pct}%</span>&nbsp;&nbsp;` +
-        `attunement <span style="color:${attColor}">${resonBar}</span>`
+      const cd  = planetView.challengeDisplay
+      const att = planetView.attunement
+
+      if (cd) {
+        // Attunement bar
+        const attBars  = Math.round(att * 12)
+        const attColor = att > 0.65 ? '#44ff88' : att > 0.35 ? '#ffdd44' : '#ff5533'
+        const attBar   = `<span style="color:${attColor}">${'█'.repeat(attBars)}${'░'.repeat(12 - attBars)}</span>`
+
+        // Pattern steps — each step is a colored chip; active = bright, done = faded, future = dim
+        const stepHtml = cd.steps.map((s, idx) => {
+          const ec  = ELEMENT_COLORS[s.element]
+          const col = '#' + ec.getHexString()
+          const emoji = ELEMENT_EMOJI[s.element]
+          const isDone   = idx < cd.stepIdx
+          const isActive = idx === cd.stepIdx
+          const op = isDone ? '0.3' : isActive ? '1.0' : '0.45'
+          const glow = isActive ? `text-shadow:0 0 10px ${col};` : ''
+          return `<span style="color:${col};opacity:${op};${glow}">${emoji}</span>`
+        }).join('<span style="color:rgba(255,255,255,0.25)"> → </span>')
+
+        // Timer bar for current step
+        const timerFrac = Math.max(0, cd.stepTimer / cd.timePerStep)
+        const timerBars = Math.round(timerFrac * 8)
+        const timerColor = timerFrac < 0.3 ? '#ff4422' : timerFrac < 0.6 ? '#ffdd44' : '#44aaff'
+        const timerBar = `<span style="color:${timerColor};font-size:8px">${'▰'.repeat(timerBars)}${'▱'.repeat(8 - timerBars)}</span>`
+
+        // Fail / success flash text
+        const flashHtml = cd.failFlash > 0.5
+          ? `<span style="color:#ff4422;opacity:${cd.failFlash}"> ✗ interrupted</span>`
+          : cd.successFlash > 0.5
+          ? `<span style="color:#44ff88;opacity:${cd.successFlash}"> ✓</span>`
+          : ''
+
+        planetStatus.innerHTML =
+          `${stepHtml}${flashHtml}` +
+          `<span style="opacity:0.3"> │ </span>` +
+          `${timerBar}` +
+          `<span style="opacity:0.3"> │ </span>` +
+          `${attBar} <span style="color:rgba(255,255,255,0.35)">${Math.round(att * 100)}%</span>`
+      } else {
+        planetStatus.innerHTML = ''
+      }
 
       updateElementUI()
 
