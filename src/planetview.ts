@@ -359,7 +359,7 @@ export class PlanetView {
         const intensity = successPulse * ripple
         
         r = r * (1 - intensity) + 0.4 * intensity
-        g = r * (1 - intensity) + intensity
+        g = g * (1 - intensity) + intensity
         b = b * (1 - intensity) + 0.4 * intensity
       }
 
