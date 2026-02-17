@@ -517,6 +517,8 @@ let hoveredSystem: System | null = null
 let activeAudio: SystemLoop | null = null
 let isDragging = false
 let isPaintDragging = false
+let isPlanetSpinning = false
+let planetVelX = 0, planetVelY = 0
 let prevMouseX = 0, prevMouseY = 0
 let velX = 0, velY = 0
 let dragSpeed = 0
@@ -537,7 +539,9 @@ function solarCamPos(): THREE.Vector3 {
 renderer.domElement.addEventListener('mousedown', (e) => {
   unlockAudio()
   if (state === 'planet') {
+    prevMouseX = e.clientX; prevMouseY = e.clientY
     if (selectedElement && planetView) isPaintDragging = true
+    else { isPlanetSpinning = true; planetVelX = 0; planetVelY = 0 }
     return
   }
   if (state !== 'galaxy' && state !== 'solar-system') return
@@ -550,6 +554,7 @@ renderer.domElement.addEventListener('mousedown', (e) => {
 document.addEventListener('mouseup', (e) => {
   if (state === 'planet') {
     isPaintDragging = false
+    isPlanetSpinning = false
     return
   }
   if (!isDragging) return
@@ -572,6 +577,18 @@ document.addEventListener('mousemove', (e) => {
   mouseX = (e.clientX / window.innerWidth) * 2 - 1
   mouseY = -((e.clientY / window.innerHeight) * 2 - 1)
   mouse.set(mouseX, mouseY)
+  if (state === 'planet' && isPlanetSpinning && planetView) {
+    const dx = e.clientX - prevMouseX
+    const dy = e.clientY - prevMouseY
+    const scale = (Math.PI * 2) / window.innerHeight
+    planetVelX = dy * scale
+    planetVelY = dx * scale
+    planetView.group.rotation.x += planetVelX
+    planetView.group.rotation.y += planetVelY
+    prevMouseX = e.clientX; prevMouseY = e.clientY
+    return
+  }
+
   if (!isDragging) return
   const dx = e.clientX - prevMouseX
   const dy = e.clientY - prevMouseY
@@ -794,6 +811,14 @@ function animate(t: number) {
   } else if (state === 'planet') {
     planetView?.update(dt)
 
+    // Spin inertia
+    if (!isPlanetSpinning && planetView) {
+      planetVelX *= 0.92
+      planetVelY *= 0.92
+      planetView.group.rotation.x += planetVelX
+      planetView.group.rotation.y += planetVelY
+    }
+
     // Painting: raycast against planet mesh while mouse is held and element selected
     if (planetView && isPaintDragging && selectedElement) {
       raycaster.setFromCamera(mouse, camera)
@@ -831,7 +856,7 @@ function animate(t: number) {
     // Hide corner nav in planet state (back button replaces it)
     if (activeCorner >= 0) { cornerEls[activeCorner].style.color = 'rgba(255,255,255,0)'; cornerEls[activeCorner].style.display = 'none' }
     activeCorner = -1
-    renderer.domElement.style.cursor = planetHovered ? 'crosshair' : 'default'
+    renderer.domElement.style.cursor = isPlanetSpinning ? 'grabbing' : planetHovered ? 'crosshair' : selectedElement ? 'crosshair' : 'grab'
   }
 
   renderer.render(scene, camera)

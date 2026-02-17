@@ -132,12 +132,13 @@ export class PlanetView {
     return KEYS.reduce((best, k) => this.resonance[k] > this.resonance[best] ? k : best, KEYS[0])
   }
 
-  /** Find nearest cell to a point in world-space (planet group is at origin). */
+  /** Find nearest cell to a point in world-space (accounts for group rotation). */
   nearestCell(worldPoint: THREE.Vector3): number {
-    const p = worldPoint.clone().normalize()
+    // Transform hit point into the group's local space so rotation is accounted for
+    const local = this.group.worldToLocal(worldPoint.clone()).normalize()
     let best = 0, bestDot = -Infinity
     for (let i = 0; i < this.cellCount; i++) {
-      const d = p.dot(this.cellCentroids[i])
+      const d = local.dot(this.cellCentroids[i])
       if (d > bestDot) { bestDot = d; best = i }
     }
     return best
