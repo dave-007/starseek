@@ -189,6 +189,8 @@ let selectedSystem: System | null = null
 let solarSystem: SolarSystem | null = null
 let planetView: PlanetView | null = null
 let currentHoveredPlanetIdx = -1
+let stickyPlanetIdx = -1       // last hovered planet — persists for a few seconds
+let stickyPlanetExpiry = 0     // animTime when sticky bubble should hide
 let solarCamAngle = 0  // kept for compat; replaced by theta/phi
 let solarCamTheta = 0        // azimuth around Y
 let solarCamPhi   = Math.PI / 3  // elevation from top (radians)
@@ -226,6 +228,7 @@ function startZoomIn(sys: System) {
 
 function enterSolarSystem() {
   hoveredSystem = null   // clear stale galaxy hover so mouseup can't retrigger zoom-in
+  stickyPlanetIdx = -1
   galaxyGroup.visible = false
   const sys = selectedSystem!
   solarSystem = new SolarSystem(sys.audioSeed, sys.color, sys.pulseSpeed)
@@ -696,9 +699,19 @@ function animate(t: number) {
       activeAudio.stop(); activeAudio = null
     }
 
-    // Label/thought bubble: show on hover
-    if (hoveredPlanetIdx >= 0 && solarSystem) {
-      const pi = solarSystem.planetInfos[hoveredPlanetIdx]
+    // Sticky bubble: update expiry when actively hovering, linger 3s after
+    if (hoveredPlanetIdx >= 0) {
+      stickyPlanetIdx   = hoveredPlanetIdx
+      stickyPlanetExpiry = animTime + 3.0
+    }
+    const showIdx = (stickyPlanetIdx >= 0 && animTime < stickyPlanetExpiry) ? stickyPlanetIdx : -1
+
+    // Fade bubble out over last 0.6s of linger
+    const stickyAge   = stickyPlanetExpiry - animTime   // counts down to 0
+    const bubbleAlpha = hoveredPlanetIdx >= 0 ? 1 : Math.max(0, Math.min(1, stickyAge / 0.6))
+
+    if (showIdx >= 0 && solarSystem) {
+      const pi = solarSystem.planetInfos[showIdx]
       tempVec.copy(pi.mesh.position).applyMatrix4(solarSystem.group.matrixWorld)
       tempVec.project(camera)
       const sx = (tempVec.x * 0.5 + 0.5) * window.innerWidth
@@ -706,18 +719,18 @@ function animate(t: number) {
       const hex = '#' + pi.tint.getHexString()
 
       if (pi.isGoldilocks && pi.lifeStory) {
-        // Show thought bubble for Goldilocks planets
         label.style.display = 'none'
         thoughtBubble.style.display = 'block'
+        thoughtBubble.style.opacity = String(bubbleAlpha)
         thoughtBubble.style.left = `${sx + 18}px`
-        thoughtBubble.style.top = `${sy - 80}px`
-        thoughtBubble.innerHTML = `<div style="color:#44ffaa;margin-bottom:6px;font-size:10px;letter-spacing:.14em;">✦ ${pi.label.toUpperCase()}</div>${pi.lifeStory}`
+        thoughtBubble.style.top  = `${sy - 80}px`
+        thoughtBubble.innerHTML  = `<div style="color:#44ffaa;margin-bottom:6px;font-size:10px;letter-spacing:.14em;">✦ ${pi.label.toUpperCase()}</div>${pi.lifeStory}`
       } else {
-        // Show simple label for non-Goldilocks planets
         thoughtBubble.style.display = 'none'
         label.style.display = 'block'
+        label.style.opacity = String(bubbleAlpha)
         label.style.left = `${sx + 14}px`
-        label.style.top = `${sy - 8}px`
+        label.style.top  = `${sy - 8}px`
         label.style.color = hex
         label.style.textShadow = `0 0 10px ${hex}`
         label.textContent = pi.label
@@ -725,6 +738,7 @@ function animate(t: number) {
     } else {
       label.style.display = 'none'
       thoughtBubble.style.display = 'none'
+      stickyPlanetIdx = -1
     }
 
     // Corner nav — detect which corner (if any) the mouse is in

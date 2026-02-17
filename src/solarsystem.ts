@@ -268,7 +268,9 @@ export class SolarSystem {
       const pi  = this.planetInfos[i]
       const hov = i === hoveredPlanetIdx
 
-      this.orbitAngles[i] += this.orbitSpeeds[i] * dt
+      // Slow orbit to 15% speed when hovered so it's easier to click
+      const orbitMul = hov ? 0.15 : 1.0
+      this.orbitAngles[i] += this.orbitSpeeds[i] * dt * orbitMul
       pi.mesh.position.set(
         Math.cos(this.orbitAngles[i]) * this.orbitRadii[i],
         0,
