@@ -11,7 +11,7 @@ function makePRNG(seed: number) {
   return () => { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return (s >>> 0) / 0xffffffff }
 }
 
-export type PhenomenonKey = 'radio' | 'ufo' | 'comet' | 'lights' | 'formation' | 'anomaly'
+export type PhenomenonKey = 'radio' | 'ufo' | 'comet' | 'lights' | 'formation' | 'anomaly' | 'probe' | 'halo' | 'debris' | 'megastructure'
 
 export interface Phenomenon {
   readonly group: THREE.Group
@@ -397,11 +397,191 @@ export function createAnomaly(seed: number): Phenomenon {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. ANCIENT PROBE — slowly tumbling spacecraft on a wide outer orbit
+// ─────────────────────────────────────────────────────────────────────────────
+export function createProbe(seed: number): Phenomenon {
+  const group = new THREE.Group()
+  const rand  = makePRNG(seed ^ 0x9b0be)
+  const probe = new THREE.Group()
+
+  // Body: flat box
+  probe.add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.035, 0.06), new THREE.MeshBasicMaterial({ color: 0x889999 })))
+  // Solar panels: two flat rectangles either side
+  const panelMat = new THREE.MeshBasicMaterial({ color: 0x224488, side: THREE.DoubleSide })
+  ;[-1, 1].forEach(side => {
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 0.07), panelMat)
+    panel.position.x = side * 0.15; panel.rotation.z = Math.PI / 2
+    probe.add(panel)
+  })
+  // Dish: thin torus
+  const dish = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.007, 6, 18), new THREE.MeshBasicMaterial({ color: 0xbbcccc }))
+  dish.position.set(0, 0.04, 0.07)
+  probe.add(dish)
+  // Antenna: thin line
+  const antGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0.1, 0)])
+  probe.add(new THREE.Line(antGeo, new THREE.LineBasicMaterial({ color: 0xaabbbb })))
+  // Blinking light
+  const blink = new THREE.Mesh(new THREE.SphereGeometry(0.009, 4, 4), new THREE.MeshBasicMaterial({ color: 0xff4422 }))
+  blink.position.set(0, 0.1, 0)
+  probe.add(blink)
+
+  // Orbit at outer edge
+  const orbitR = 7 + rand() * 3
+  const startTheta = rand() * Math.PI * 2
+  const orbitSpeed = 0.02 + rand() * 0.015
+  const tumbleAxis = new THREE.Vector3(rand() - 0.5, rand() - 0.5, rand() - 0.5).normalize()
+  group.add(probe)
+
+  let time = 0; let theta = startTheta
+  return {
+    group,
+    update(dt) {
+      time += dt
+      theta += orbitSpeed * dt
+      probe.position.set(Math.cos(theta) * orbitR, (rand() - 0.5) * 1.5, Math.sin(theta) * orbitR)
+      probe.rotateOnAxis(tumbleAxis, dt * 0.25)
+      ;(blink.material as THREE.MeshBasicMaterial).opacity = Math.round((Math.sin(time * 1.8) + 1) / 2)
+    },
+    dispose() { group.traverse(o => { (o as THREE.Mesh).geometry?.dispose() }) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. STELLAR HALO — aurora-like rings precessing around the star
+// ─────────────────────────────────────────────────────────────────────────────
+export function createHalo(seed: number): Phenomenon {
+  const group = new THREE.Group()
+  const rand  = makePRNG(seed ^ 0x4a10)
+  const COLS  = [0xff6622, 0xff44aa, 0x44ffcc, 0xffdd22, 0x8844ff]
+  const rings: { mesh: THREE.Mesh; tiltAxis: THREE.Vector3; tiltSpeed: number; phase: number }[] = []
+  for (let i = 0; i < 5; i++) {
+    const r = 1.0 + i * 0.35
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(r, 0.025 - i * 0.003, 8, 80),
+      new THREE.MeshBasicMaterial({ color: COLS[i], transparent: true, opacity: 0.22 - i * 0.03, blending: THREE.AdditiveBlending, depthWrite: false })
+    )
+    const tiltAxis = new THREE.Vector3(rand() - 0.5, rand() - 0.5, rand() - 0.5).normalize()
+    ring.setRotationFromAxisAngle(tiltAxis, rand() * Math.PI)
+    rings.push({ mesh: ring, tiltAxis, tiltSpeed: (rand() - 0.5) * 0.18, phase: rand() * Math.PI * 2 })
+    group.add(ring)
+  }
+  let time = 0
+  return {
+    group,
+    update(dt) {
+      time += dt
+      for (const r of rings) {
+        r.mesh.rotateOnAxis(r.tiltAxis, r.tiltSpeed * dt)
+        r.phase += dt * 0.6
+        ;(r.mesh.material as THREE.MeshBasicMaterial).opacity = (0.18 + Math.sin(r.phase) * 0.07) * (1 - rings.indexOf(r) * 0.03)
+      }
+    },
+    dispose() { group.traverse(o => { (o as THREE.Mesh).geometry?.dispose() }) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. DEBRIS FIELD — tumbling collision fragments in a localised cloud
+// ─────────────────────────────────────────────────────────────────────────────
+export function createDebris(seed: number, planets: PlanetInfo[]): Phenomenon {
+  const group = new THREE.Group()
+  const rand  = makePRNG(seed ^ 0xdeb4)
+  const N = 180
+  const GEOS = [new THREE.TetrahedronGeometry(1, 0), new THREE.OctahedronGeometry(1, 0), new THREE.IcosahedronGeometry(1, 0)]
+  const mat  = new THREE.MeshBasicMaterial({ color: 0x887766, wireframe: false })
+  // Centre the cloud around a random planet or a mid-belt position
+  const cx = (rand() - 0.5) * 12, cy = (rand() - 0.5) * 3, cz = (rand() - 0.5) * 12
+  const dummy = new THREE.Object3D()
+  const mesh  = new THREE.InstancedMesh(GEOS[Math.floor(rand() * 3)], mat, N)
+  const axes: THREE.Vector3[] = [], speeds: number[] = [], angles: number[] = []
+  const offsets: THREE.Vector3[] = []
+  for (let i = 0; i < N; i++) {
+    const r = 0.8 + rand() * 1.8
+    axes.push(new THREE.Vector3(rand() - 0.5, rand() - 0.5, rand() - 0.5).normalize())
+    speeds.push((rand() - 0.5) * 1.2)
+    angles.push(rand() * Math.PI * 2)
+    offsets.push(new THREE.Vector3(cx + (rand()-0.5)*r, cy + (rand()-0.5)*r*0.5, cz + (rand()-0.5)*r))
+    dummy.position.copy(offsets[i])
+    dummy.scale.setScalar(0.02 + rand() * 0.055)
+    dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix)
+  }
+  mesh.instanceMatrix.needsUpdate = true
+  group.add(mesh)
+  return {
+    group,
+    update(dt) {
+      for (let i = 0; i < N; i++) {
+        angles[i] += speeds[i] * dt
+        dummy.position.copy(offsets[i])
+        dummy.setRotationFromAxisAngle(axes[i], angles[i])
+        dummy.scale.setScalar(0.02 + (i / N) * 0.05)
+        dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix)
+      }
+      mesh.instanceMatrix.needsUpdate = true
+    },
+    dispose() { mesh.geometry.dispose(); mat.dispose() }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. MEGASTRUCTURE — partial Dyson ring under construction around the star
+// ─────────────────────────────────────────────────────────────────────────────
+export function createMegastructure(seed: number): Phenomenon {
+  const group = new THREE.Group()
+  const rand  = makePRNG(seed ^ 0x4d5a)
+  // Main arc: TorusGeometry with limited arc (use a custom tube along arc)
+  const arcAngle = (0.45 + rand() * 0.35) * Math.PI * 2  // 45–80% complete
+  const R = 1.4 + rand() * 0.6
+  const points: THREE.Vector3[] = []
+  const SEG = 64
+  for (let i = 0; i <= SEG; i++) {
+    const a = (i / SEG) * arcAngle - arcAngle / 2
+    points.push(new THREE.Vector3(Math.cos(a) * R, 0, Math.sin(a) * R))
+  }
+  const arcGeo = new THREE.BufferGeometry().setFromPoints(points)
+  group.add(new THREE.Line(arcGeo, new THREE.LineBasicMaterial({ color: 0x4488aa, transparent: true, opacity: 0.55 })))
+
+  // Cross-struts along the arc
+  for (let i = 0; i < 12; i++) {
+    const a = ((i / 12) * arcAngle) - arcAngle / 2
+    const strutPts = [
+      new THREE.Vector3(Math.cos(a) * (R - 0.2), 0, Math.sin(a) * (R - 0.2)),
+      new THREE.Vector3(Math.cos(a) * (R + 0.2), 0, Math.sin(a) * (R + 0.2)),
+    ]
+    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(strutPts), new THREE.LineBasicMaterial({ color: 0x336688, transparent: true, opacity: 0.38 })))
+  }
+
+  // Construction nodes: tiny boxes at the arc ends
+  ;[-1, 1].forEach(side => {
+    const a = side * arcAngle / 2
+    const node = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshBasicMaterial({ color: 0x88ddff }))
+    node.position.set(Math.cos(a) * R, 0, Math.sin(a) * R)
+    group.add(node)
+    // Blinking worker-craft nearby
+    const craft = new THREE.Mesh(new THREE.OctahedronGeometry(0.025, 0), new THREE.MeshBasicMaterial({ color: 0xffeedd }))
+    craft.position.set(Math.cos(a) * (R + 0.3), 0.1, Math.sin(a) * (R + 0.3))
+    group.add(craft)
+  })
+
+  group.rotation.x = (rand() - 0.5) * 0.5
+  group.rotation.z = (rand() - 0.5) * 0.3
+  let time = 0
+  return {
+    group,
+    update(dt) {
+      time += dt
+      group.rotation.y += dt * 0.025
+    },
+    dispose() { group.traverse(o => { (o as THREE.Mesh).geometry?.dispose() }) }
+  }
+}
+
 // =============================================================================
 // GALAXY PHENOMENA — toggleable star-layer animations
 // =============================================================================
 
-export type GalaxyPhenomenonKey = 'nebulae' | 'signalweb' | 'streams' | 'wormhole' | 'pulsars' | 'void' | 'messier' | 'randomoddness'
+export type GalaxyPhenomenonKey = 'nebulae' | 'signalweb' | 'streams' | 'wormhole' | 'pulsars' | 'void' | 'messier' | 'randomoddness' | 'darkmatter' | 'beacon' | 'lens' | 'nursery'
 
 export interface GalaxyPhenomenon {
   readonly group: THREE.Group
@@ -717,4 +897,167 @@ export function createMessierObjects(seed: number): GalaxyPhenomenon {
 // This factory returns a no-op group so spawnGalaxyPhenomenon can handle it gracefully.
 export function createRandomOddnessStub(): GalaxyPhenomenon {
   return { group: new THREE.Group(), update() {}, dispose() {} }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DARK MATTER WEB — faint filamentary cosmic web across the galaxy
+// ─────────────────────────────────────────────────────────────────────────────
+export function createDarkMatter(seed: number): GalaxyPhenomenon {
+  const group = new THREE.Group()
+  const rand  = makePRNG(seed ^ 0xda4c)
+  // Generate random nodes, connect nearby ones with faint lines
+  const N = 28
+  const nodes: THREE.Vector3[] = []
+  for (let i = 0; i < N; i++) {
+    const r = 1.2 + rand() * 1.5
+    const th = rand() * Math.PI * 2, ph = Math.acos(2 * rand() - 1)
+    nodes.push(new THREE.Vector3(Math.sin(ph)*Math.cos(th)*r, (rand()-.5)*.8, Math.sin(ph)*Math.sin(th)*r))
+  }
+  const mat = new THREE.LineBasicMaterial({ color: 0x334455, transparent: true, opacity: 0.18 })
+  for (let i = 0; i < N; i++) {
+    for (let j = i+1; j < N; j++) {
+      if (nodes[i].distanceTo(nodes[j]) < 1.1) {
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([nodes[i], nodes[j]]), mat)
+        group.add(line)
+      }
+    }
+  }
+  // Node glows
+  nodes.forEach(p => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.02, 4, 4), new THREE.MeshBasicMaterial({ color: 0x4466aa, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }))
+    m.position.copy(p); group.add(m)
+  })
+  let time = 0
+  return {
+    group,
+    update(dt) { time += dt; group.children.forEach((c, i) => { if ((c as THREE.Line).isLine) { const m = (c as THREE.Line).material; if (!Array.isArray(m)) m.opacity = 0.12 + Math.sin(time * 0.3 + i * 0.4) * 0.07 } }) },
+    dispose() { group.traverse(o => { (o as THREE.Mesh).geometry?.dispose() }) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALIEN BEACON — precise geometric signal source with regular pulses
+// ─────────────────────────────────────────────────────────────────────────────
+export function createBeacon(seed: number): GalaxyPhenomenon {
+  const group = new THREE.Group()
+  const rand  = makePRNG(seed ^ 0xbec0)
+  // Place at a random point off the galaxy
+  const th = rand() * Math.PI * 2, r = 1.6 + rand() * 0.8
+  group.position.set(Math.cos(th) * r, (rand()-.5)*.6, Math.sin(th) * r)
+
+  // Tetrahedron wireframe
+  const tet = new THREE.Mesh(new THREE.TetrahedronGeometry(0.12, 0), new THREE.MeshBasicMaterial({ color: 0x44ffcc, wireframe: true, transparent: true, opacity: 0.7 }))
+  group.add(tet)
+
+  // Concentric expanding signal rings
+  const rings: { mesh: THREE.Mesh; t: number }[] = []
+  for (let i = 0; i < 4; i++) {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.01, 0.025, 32),
+      new THREE.MeshBasicMaterial({ color: 0x44ffcc, transparent: true, opacity: 0, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false })
+    )
+    ring.rotation.x = -Math.PI / 2
+    group.add(ring)
+    rings.push({ mesh: ring, t: i / 4 })
+  }
+
+  let time = 0
+  return {
+    group,
+    update(dt) {
+      time += dt
+      tet.rotation.y += dt * 0.4; tet.rotation.x += dt * 0.25
+      for (const r of rings) {
+        r.t = (r.t + dt * 0.28) % 1
+        r.mesh.scale.setScalar(1 + r.t * 12)
+        ;(r.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - r.t) * 0.45
+      }
+    },
+    dispose() { group.traverse(o => { (o as THREE.Mesh).geometry?.dispose() }) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GRAVITATIONAL LENS — rippling distortion rings around a massive body
+// ─────────────────────────────────────────────────────────────────────────────
+export function createLens(seed: number): GalaxyPhenomenon {
+  const group = new THREE.Group()
+  const rand  = makePRNG(seed ^ 0x1e45)
+  const th = rand() * Math.PI * 2, r = 1.5 + rand() * 1.0
+  group.position.set(Math.cos(th) * r, (rand()-.5)*.4, Math.sin(th) * r)
+
+  // Dark centre mass
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.055, 12, 12), new THREE.MeshBasicMaterial({ color: 0x000010 }))
+  group.add(core)
+
+  // Lensing rings — they expand outward and fade
+  const rings: { mesh: THREE.Mesh; t: number; speed: number }[] = []
+  for (let i = 0; i < 6; i++) {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.04, 0.06, 64),
+      new THREE.MeshBasicMaterial({ color: 0xaaccff, transparent: true, opacity: 0, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false })
+    )
+    ring.rotation.x = (rand() - 0.5) * 0.4
+    group.add(ring)
+    rings.push({ mesh: ring, t: i / 6, speed: 0.12 + rand() * 0.08 })
+  }
+
+  return {
+    group,
+    update(dt) {
+      for (const r of rings) {
+        r.t = (r.t + dt * r.speed) % 1
+        r.mesh.scale.setScalar(1 + r.t * 8)
+        ;(r.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, (0.5 - r.t) * 0.55)
+      }
+    },
+    dispose() { group.traverse(o => { (o as THREE.Mesh).geometry?.dispose() }) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STELLAR NURSERY — dense proto-star cluster with gas glow
+// ─────────────────────────────────────────────────────────────────────────────
+export function createNursery(seed: number): GalaxyPhenomenon {
+  const group = new THREE.Group()
+  const rand  = makePRNG(seed ^ 0x4a5e)
+  const th = rand() * Math.PI * 2, r = 1.3 + rand() * 0.9
+  group.position.set(Math.cos(th) * r, (rand()-.5)*.5, Math.sin(th) * r)
+
+  // Gas cloud layers
+  const COLS = [0xff6622, 0xff4488, 0xffaa44]
+  for (let i = 0; i < 3; i++) {
+    const cloud = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3 + i * 0.15, 8, 8),
+      new THREE.MeshBasicMaterial({ color: COLS[i], transparent: true, opacity: 0.055 - i * 0.012, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false })
+    )
+    cloud.scale.set(1, 0.6, 1)
+    group.add(cloud)
+  }
+
+  // Proto-stars — bright dots embedded in the cloud
+  const starData: { mesh: THREE.Mesh; phase: number; speed: number }[] = []
+  for (let i = 0; i < 8; i++) {
+    const s = new THREE.Mesh(
+      new THREE.SphereGeometry(0.012, 4, 4),
+      new THREE.MeshBasicMaterial({ color: 0xffddaa, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })
+    )
+    s.position.set((rand()-.5)*.3, (rand()-.5)*.15, (rand()-.5)*.3)
+    group.add(s)
+    starData.push({ mesh: s, phase: rand() * Math.PI * 2, speed: 0.8 + rand() * 1.2 })
+  }
+
+  let time = 0
+  return {
+    group,
+    update(dt) {
+      time += dt
+      for (const s of starData) {
+        s.phase += dt * s.speed
+        ;(s.mesh.material as THREE.MeshBasicMaterial).opacity = 0.55 + Math.sin(s.phase) * 0.4
+        s.mesh.scale.setScalar(1 + Math.sin(s.phase * 1.3) * 0.3)
+      }
+    },
+    dispose() { group.traverse(o => { (o as THREE.Mesh).geometry?.dispose() }) }
+  }
 }

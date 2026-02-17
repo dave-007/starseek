@@ -7,9 +7,11 @@ import { PlanetView, DEFAULT_MIX, ElementMix, ElementKey, SEED_EVENTS, SeedEvent
 import {
   type Phenomenon, type PhenomenonKey,
   createRadio, createUFO, createComet, createCityLights, createFormation, createAnomaly,
+  createProbe, createHalo, createDebris, createMegastructure,
   type GalaxyPhenomenon, type GalaxyPhenomenonKey,
   createNebulae, createSignalWeb, createStarStreams, createWormhole, createPulsars, createVoid,
-  createMessierObjects, createRandomOddnessStub
+  createMessierObjects, createRandomOddnessStub,
+  createDarkMatter, createBeacon, createLens, createNursery,
 } from './phenomena'
 
 // ---------------------------------------------------------------------------
@@ -246,12 +248,16 @@ let mouseScreenX = 0, mouseScreenY = 0
 // Phenomena — toggleable solar system animations
 // ---------------------------------------------------------------------------
 const PHENOMENON_DEFS: { key: PhenomenonKey; label: string }[] = [
-  { key: 'radio',     label: 'Radio Signals'  },
-  { key: 'ufo',       label: 'UFO Scout'      },
-  { key: 'comet',     label: 'Comet'          },
-  { key: 'lights',    label: 'City Lights'    },
-  { key: 'formation', label: 'Formation'      },
-  { key: 'anomaly',   label: 'Anomaly'        },
+  { key: 'radio',          label: 'Radio Signals'   },
+  { key: 'ufo',            label: 'UFO Scout'       },
+  { key: 'comet',          label: 'Comet'           },
+  { key: 'lights',         label: 'City Lights'     },
+  { key: 'formation',      label: 'Formation'       },
+  { key: 'anomaly',        label: 'Anomaly'         },
+  { key: 'probe',          label: 'Ancient Probe'   },
+  { key: 'halo',           label: 'Stellar Halo'    },
+  { key: 'debris',         label: 'Debris Field'    },
+  { key: 'megastructure',  label: 'Megastructure'   },
 ]
 
 const phenomenaActive: Partial<Record<PhenomenonKey, boolean>> = {}
@@ -303,12 +309,16 @@ function spawnPhenomenon(key: PhenomenonKey) {
   const seed = (selectedSystem?.audioSeed ?? 0) + key.charCodeAt(0)
   let inst: Phenomenon | null = null
   switch (key) {
-    case 'radio':     inst = createRadio(solarSystem.planetInfos); break
-    case 'ufo':       inst = createUFO(seed, solarSystem.planetInfos); break
-    case 'comet':     inst = createComet(seed); break
-    case 'lights':    inst = createCityLights(seed, solarSystem.planetInfos); break
-    case 'formation': inst = createFormation(seed); break
-    case 'anomaly':   inst = createAnomaly(seed); break
+    case 'radio':         inst = createRadio(solarSystem.planetInfos); break
+    case 'ufo':           inst = createUFO(seed, solarSystem.planetInfos); break
+    case 'comet':         inst = createComet(seed); break
+    case 'lights':        inst = createCityLights(seed, solarSystem.planetInfos); break
+    case 'formation':     inst = createFormation(seed); break
+    case 'anomaly':       inst = createAnomaly(seed); break
+    case 'probe':         inst = createProbe(seed); break
+    case 'halo':          inst = createHalo(seed); break
+    case 'debris':        inst = createDebris(seed, solarSystem.planetInfos); break
+    case 'megastructure': inst = createMegastructure(seed); break
   }
   if (inst) {
     scene.add(inst.group)
@@ -340,6 +350,10 @@ const GALAXY_PHENOMENON_DEFS: { key: GalaxyPhenomenonKey; label: string }[] = [
   { key: 'pulsars',      label: 'Pulsars'        },
   { key: 'void',         label: 'Void'           },
   { key: 'messier',      label: 'Deep-Sky Objects'},
+  { key: 'darkmatter',   label: 'Dark Matter Web'},
+  { key: 'beacon',       label: 'Alien Beacon'   },
+  { key: 'lens',         label: 'Gravity Lens'   },
+  { key: 'nursery',      label: 'Stellar Nursery'},
   { key: 'randomoddness',label: 'Random Oddness' },
 ]
 
@@ -393,6 +407,10 @@ function spawnGalaxyPhenomenon(key: GalaxyPhenomenonKey) {
     case 'pulsars':      inst = createPulsars(seed, sysPositions); break
     case 'void':         inst = createVoid(seed); break
     case 'messier':      inst = createMessierObjects(seed); break
+    case 'darkmatter':   inst = createDarkMatter(seed); break
+    case 'beacon':       inst = createBeacon(seed); break
+    case 'lens':         inst = createLens(seed); break
+    case 'nursery':      inst = createNursery(seed); break
     case 'randomoddness':inst = createRandomOddnessStub(); randomOddnessActive = true; scheduleNextOddness(); break
   }
   if (inst) { scene.add(inst.group); galaxyPhenomenaInstances[key] = inst }
@@ -412,7 +430,7 @@ function tickRandomOddness(dt: number) {
   if (randomOddnessTimer > 0) return
   scheduleNextOddness()
   // Pick a random non-oddness key and toggle it
-  const ODDS_KEYS: GalaxyPhenomenonKey[] = ['nebulae', 'signalweb', 'streams', 'wormhole', 'pulsars', 'void', 'messier']
+  const ODDS_KEYS: GalaxyPhenomenonKey[] = ['nebulae', 'signalweb', 'streams', 'wormhole', 'pulsars', 'void', 'messier', 'darkmatter', 'beacon', 'lens', 'nursery']
   const key = ODDS_KEYS[Math.floor(Math.random() * ODDS_KEYS.length)]
   toggleGalaxyPhenomenon(key)
 }
@@ -985,8 +1003,10 @@ function animate(t: number) {
     animTime += dt * timeScale
 
     if (!isDragging) {
-      velX += (mouseY * 0.00018 - velX) * 0.027
-      velY += (mouseX * 0.00018 + 0.00033 - velY) * 0.027
+      // Slow ambient drift steered by mouse position.
+      // mouseX/mouseY are NDC (-1..1). Base constant keeps it drifting at rest.
+      velX += (-mouseY * 0.0009 - velX) * 0.04
+      velY += ( mouseX * 0.0012 + 0.0005 - velY) * 0.04
       galaxy.rotation.x += velX
       galaxy.rotation.y += velY
       hexGrid.rotation.copy(galaxy.rotation)
@@ -1168,9 +1188,9 @@ function animate(t: number) {
     animTime += dt * timeScale
 
     if (!isDragging) {
-      // Triple inertia + gentle mouse attraction (theta ↔ mouseX, phi ↔ -mouseY)
-      solarVelTheta += (mouseX * 0.00018 + 0.00033 - solarVelTheta) * 0.027
-      solarVelPhi   += (-mouseY * 0.00012 - solarVelPhi) * 0.027
+      // Slow ambient orbit steered by mouse position.
+      solarVelTheta += ( mouseX * 0.0012 + 0.0005 - solarVelTheta) * 0.04
+      solarVelPhi   += (-mouseY * 0.0009          - solarVelPhi  ) * 0.04
       solarCamTheta += solarVelTheta
       solarCamPhi = Math.max(0.05, Math.min(Math.PI - 0.05, solarCamPhi + solarVelPhi))
     }
