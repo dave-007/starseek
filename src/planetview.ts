@@ -347,11 +347,20 @@ export class PlanetView {
         b = b * (1 - failPulse)
       }
 
-      // Success flash: bleed bright white-green over filled zone
+      // Success flash: bleed bright white-green over filled zone with ripple effect
       if (successPulse > 0 && zi >= 0 && this.zones[zi].filled) {
-        r = r * (1 - successPulse) + 0.4 * successPulse
-        g = g * (1 - successPulse) + successPulse
-        b = b * (1 - successPulse) + 0.4 * successPulse
+        // Calculate distance from zone center for ripple effect
+        const zoneCells = this.zones[zi].cells
+        const zoneCenter = zoneCells.reduce((sum, ci) => {
+          return sum.add(this.cellCentroids[ci])
+        }, new THREE.Vector3()).divideScalar(zoneCells.length)
+        const distFromCenter = this.cellCentroids[i].distanceTo(zoneCenter)
+        const ripple = Math.max(0, 1 - (successPulse * 2 - distFromCenter * 2))
+        const intensity = successPulse * ripple
+        
+        r = r * (1 - intensity) + 0.4 * intensity
+        g = r * (1 - intensity) + intensity
+        b = b * (1 - intensity) + 0.4 * intensity
       }
 
       // Gentle pulse on faint zone hints (not active zone)
