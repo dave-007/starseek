@@ -1,7 +1,8 @@
 // Lead Track - melodic lead synth
 
 import * as Tone from 'tone'
-import type { Track } from './index'
+import type { Track, TrackParams } from './index'
+import { DEFAULT_TRACK_PARAMS } from './index'
 import { SCALES, midiToFreq } from '../scales'
 
 export class LeadTrack implements Track {
@@ -14,6 +15,7 @@ export class LeadTrack implements Track {
   private level = 1
   private scale = SCALES.pentatonicMinor
   private root = 72 // C5
+  private params: TrackParams = { ...DEFAULT_TRACK_PARAMS }
 
   constructor(output: Tone.InputNode) {
     this.gain = new Tone.Gain(0)
@@ -67,6 +69,8 @@ export class LeadTrack implements Track {
     this.sequence = new Tone.Sequence(
       (time, note) => {
         if (this.muted || note === null) return
+        // Density affects whether note plays
+        if (Math.random() > this.params.density * 1.2 + 0.4) return
         this.synth.triggerAttackRelease(midiToFreq(note), '16n', time)
       },
       pattern,
@@ -102,6 +106,27 @@ export class LeadTrack implements Track {
   setLevel(level: number) {
     this.level = Math.max(0, Math.min(1, level))
     this.updateGain()
+  }
+
+  setParams(params: Partial<TrackParams>) {
+    Object.assign(this.params, params)
+    // Energy affects envelope
+    const attack = 0.005 + (1 - this.params.energy) * 0.05
+    const decay = 0.1 + (1 - this.params.energy) * 0.2
+    this.synth.envelope.attack = attack
+    this.synth.envelope.decay = decay
+    // Brightness affects filter
+    const baseFreq = 200 + this.params.brightness * 600
+    const octaves = 1.5 + this.params.brightness * 3
+    this.synth.filterEnvelope.baseFrequency = baseFreq
+    this.synth.filterEnvelope.octaves = octaves
+    // Movement affects delay
+    this.delay.wet.linearRampTo(0.1 + this.params.movement * 0.5, 0.1)
+    this.delay.feedback.linearRampTo(0.1 + this.params.movement * 0.4, 0.1)
+  }
+
+  getParams(): TrackParams {
+    return { ...this.params }
   }
 
   private updateGain() {

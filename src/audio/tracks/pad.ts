@@ -1,7 +1,8 @@
 // Pad Track - sustained chords
 
 import * as Tone from 'tone'
-import type { Track } from './index'
+import type { Track, TrackParams } from './index'
+import { DEFAULT_TRACK_PARAMS } from './index'
 import { SCALES, midiToFreq } from '../scales'
 
 export class PadTrack implements Track {
@@ -9,11 +10,13 @@ export class PadTrack implements Track {
   private sequence: Tone.Sequence | null = null
   private gain: Tone.Gain
   private filter: Tone.Filter
+  private lfo: Tone.LFO
   private muted = true
   private baseGain = 0.2
   private level = 1
   private scale = SCALES.pentatonicMinor
   private root = 48 // C3
+  private params: TrackParams = { ...DEFAULT_TRACK_PARAMS }
 
   constructor(output: Tone.InputNode) {
     this.gain = new Tone.Gain(0)
@@ -25,6 +28,15 @@ export class PadTrack implements Track {
       rolloff: -12,
     })
     this.filter.connect(this.gain)
+
+    // LFO for movement parameter
+    this.lfo = new Tone.LFO({
+      frequency: 0.5,
+      min: 800,
+      max: 2500,
+    })
+    this.lfo.connect(this.filter.frequency)
+    this.lfo.start()
 
     this.synth = new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: 'sine' },
@@ -91,6 +103,23 @@ export class PadTrack implements Track {
     this.updateGain()
   }
 
+  setParams(params: Partial<TrackParams>) {
+    Object.assign(this.params, params)
+    // Brightness affects filter cutoff range
+    const minFreq = 500 + this.params.brightness * 800
+    const maxFreq = 1500 + this.params.brightness * 3000
+    this.lfo.min = minFreq
+    this.lfo.max = maxFreq
+    // Movement affects LFO speed
+    this.lfo.frequency.linearRampTo(0.1 + this.params.movement * 1.5, 0.1)
+    // Energy affects attack
+    // Note: PolySynth doesn't have direct envelope access after creation, so we skip this
+  }
+
+  getParams(): TrackParams {
+    return { ...this.params }
+  }
+
   private updateGain() {
     const target = this.muted ? 0 : this.baseGain * this.level
     this.gain.gain.linearRampTo(target, 0.12)
@@ -100,6 +129,7 @@ export class PadTrack implements Track {
     this.stop()
     this.synth.dispose()
     this.filter.dispose()
+    this.lfo.dispose()
     this.gain.dispose()
   }
 }

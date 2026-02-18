@@ -1,7 +1,8 @@
 // Hi-Hat Track - driving eighth notes
 
 import * as Tone from 'tone'
-import type { Track } from './index'
+import type { Track, TrackParams } from './index'
+import { DEFAULT_TRACK_PARAMS } from './index'
 
 export class HiHatTrack implements Track {
   private synth: Tone.MetalSynth
@@ -10,6 +11,7 @@ export class HiHatTrack implements Track {
   private muted = true
   private baseGain = 0.15
   private level = 1
+  private params: TrackParams = { ...DEFAULT_TRACK_PARAMS }
 
   constructor(output: Tone.InputNode) {
     this.gain = new Tone.Gain(0)
@@ -39,7 +41,11 @@ export class HiHatTrack implements Track {
     this.sequence = new Tone.Sequence(
       (time, vel) => {
         if (this.muted) return
-        this.synth.triggerAttackRelease('16n', time, vel)
+        // Density affects whether note plays
+        if (Math.random() > this.params.density * 1.2 + 0.4) return
+        // Energy affects velocity
+        const velocity = vel * (0.5 + this.params.energy * 0.5)
+        this.synth.triggerAttackRelease('16n', time, velocity)
       },
       pattern,
       '16n'
@@ -65,6 +71,19 @@ export class HiHatTrack implements Track {
   setLevel(level: number) {
     this.level = Math.max(0, Math.min(1, level))
     this.updateGain()
+  }
+
+  setParams(params: Partial<TrackParams>) {
+    Object.assign(this.params, params)
+    // Energy affects decay
+    const decay = 0.03 + (1 - this.params.energy) * 0.1
+    this.synth.envelope.decay = decay
+    // Brightness affects resonance
+    this.synth.resonance = 2000 + this.params.brightness * 6000
+  }
+
+  getParams(): TrackParams {
+    return { ...this.params }
   }
 
   private updateGain() {
