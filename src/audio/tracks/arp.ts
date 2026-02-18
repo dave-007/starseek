@@ -1,7 +1,8 @@
 // Arp Track - arpeggiated synth pattern
 
 import * as Tone from 'tone'
-import type { Track } from './index'
+import type { Track, TrackParams } from './index'
+import { DEFAULT_TRACK_PARAMS } from './index'
 import { SCALES, midiToFreq } from '../scales'
 
 export class ArpTrack implements Track {
@@ -14,6 +15,7 @@ export class ArpTrack implements Track {
   private level = 1
   private scale = SCALES.pentatonicMinor
   private root = 60 // C4
+  private params: TrackParams = { ...DEFAULT_TRACK_PARAMS }
 
   constructor(output: Tone.InputNode) {
     this.gain = new Tone.Gain(0)
@@ -54,7 +56,11 @@ export class ArpTrack implements Track {
     this.sequence = new Tone.Sequence(
       (time, note) => {
         if (this.muted) return
-        this.synth.triggerAttackRelease(midiToFreq(note), '32n', time, 0.6)
+        // Density affects whether note plays
+        if (Math.random() > this.params.density * 1.1 + 0.45) return
+        // Energy affects velocity
+        const velocity = 0.3 + this.params.energy * 0.5
+        this.synth.triggerAttackRelease(midiToFreq(note), '32n', time, velocity)
       },
       pattern,
       '16n'
@@ -91,6 +97,17 @@ export class ArpTrack implements Track {
   setLevel(level: number) {
     this.level = Math.max(0, Math.min(1, level))
     this.updateGain()
+  }
+
+  setParams(params: Partial<TrackParams>) {
+    Object.assign(this.params, params)
+    // Brightness affects filter cutoff
+    this.filter.frequency.linearRampTo(1000 + this.params.brightness * 5000, 0.1)
+    // Movement could affect detune or other modulation (simplified here)
+  }
+
+  getParams(): TrackParams {
+    return { ...this.params }
   }
 
   private updateGain() {
