@@ -1119,8 +1119,21 @@ renderer.domElement.addEventListener('mousedown', (e) => {
   }
   if (state === 'planet') {
     prevMouseX = e.clientX; prevMouseY = e.clientY
-    if (selectedElement && planetView) isPaintDragging = true
-    else { isPlanetSpinning = true; planetVelX = 0; planetVelY = 0 }
+    // Update mouse NDC so raycaster uses the click position (mousemove may not have fired)
+    mouse.set(
+      (e.clientX / window.innerWidth) * 2 - 1,
+      -((e.clientY / window.innerHeight) * 2 - 1)
+    )
+    if (selectedElement && planetView) {
+      isPaintDragging = true
+      // Paint immediately so a single click registers (animation frame may not fire before mouseup)
+      raycaster.setFromCamera(mouse, camera)
+      const hits = raycaster.intersectObjects(planetView.group.children, false)
+      if (hits.length > 0) {
+        const cellIdx = planetView.nearestCell(hits[0].point)
+        planetView.paint(cellIdx, selectedElement)
+      }
+    } else { isPlanetSpinning = true; planetVelX = 0; planetVelY = 0 }
     return
   }
   if (state !== 'galaxy' && state !== 'solar-system') return
@@ -1627,3 +1640,25 @@ function animate(t: number) {
   renderer.render(scene, camera)
 }
 requestAnimationFrame(animate)
+
+// ---------------------------------------------------------------------------
+// Test hooks — expose minimal state for Playwright e2e tests
+// ---------------------------------------------------------------------------
+;(window as unknown as Record<string, unknown>).__starseek = {
+  get state()           { return state },
+  get selectedElement() { return selectedElement },
+  get planetView()      { return planetView },
+  enterPlanetForTest() {
+    if (planetView) { scene.remove(planetView.group); planetView.dispose() }
+    const color = new THREE.Color(0x4488ff)
+    planetView = new PlanetView(42, color, 0.5)
+    scene.add(planetView.group)
+    camera.position.set(0, 0, 2.4)
+    camera.lookAt(0, 0, 0)
+    state = 'planet' as AppState
+    elementBar.style.display = 'flex'
+    planetView.reset(SEED_EVENTS[0])
+    selectedElement = planetView.requiredElement
+    updateElementUI()
+  },
+}
