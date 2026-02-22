@@ -658,15 +658,28 @@ elementBar.style.cssText = `
 document.body.appendChild(elementBar)
 
 const elementBtns: HTMLElement[] = []
-ELEMENTS.forEach(({ key, label, color }) => {
+ELEMENTS.forEach(({ key, label, color }, i) => {
   const btn = document.createElement('div')
   btn.style.cssText = `
     font-family:'Courier New',monospace; font-size:11px; letter-spacing:.12em;
     color:${color}; border:1px solid ${color}44; padding:7px 18px; cursor:pointer;
-    transition:background .15s, border-color .15s, box-shadow .15s; user-select:none;
-    background:${color}0d;
+    transition:all .2s ease; user-select:none; background:${color}0d;
+    border-radius:3px; position:relative;
   `
-  btn.textContent = label
+  // Add emoji icon and keyboard hint
+  const emoji = ELEMENT_EMOJI[key]
+  const keyHint = (i + 1).toString()
+  btn.innerHTML = `<span style="opacity:0.6;margin-right:6px;">${emoji}</span>${label}<span style="opacity:0.4;margin-left:8px;font-size:9px;">${keyHint}</span>`
+  
+  btn.addEventListener('mouseenter', () => {
+    if (selectedElement !== key) {
+      btn.style.background = `${color}18`
+      btn.style.transform = 'translateY(-2px)'
+    }
+  })
+  btn.addEventListener('mouseleave', () => {
+    btn.style.transform = 'translateY(0)'
+  })
   btn.addEventListener('mousedown', (e) => {
     e.stopPropagation()
     selectedElement = selectedElement === key ? null : key
@@ -681,20 +694,28 @@ function updateElementUI() {
   ELEMENTS.forEach(({ key, color }, i) => {
     const active   = selectedElement === key
     const isNeeded = key === required   // currently required by the challenge
-    elementBtns[i].textContent = ELEMENTS[i].label
+    const emoji = ELEMENT_EMOJI[key]
+    const keyHint = (i + 1).toString()
+    
     if (active) {
-      elementBtns[i].style.background  = `${color}44`
+      elementBtns[i].innerHTML = `<span style="opacity:0.9;margin-right:6px;">${emoji}</span>${ELEMENTS[i].label}<span style="opacity:0.5;margin-left:8px;font-size:9px;">${keyHint}</span>`
+      elementBtns[i].style.background  = `${color}55`
       elementBtns[i].style.borderColor = color
-      elementBtns[i].style.boxShadow   = `0 0 14px ${color}88`
+      elementBtns[i].style.boxShadow   = `0 0 20px ${color}aa, 0 4px 12px rgba(0,0,0,0.4)`
+      elementBtns[i].style.transform   = 'scale(1.08)'
     } else if (isNeeded) {
       // Glow the required element to help the player
-      elementBtns[i].style.background  = `${color}22`
-      elementBtns[i].style.borderColor = `${color}cc`
-      elementBtns[i].style.boxShadow   = `0 0 10px ${color}66`
+      elementBtns[i].innerHTML = `<span style="opacity:0.8;margin-right:6px;">${emoji}</span>${ELEMENTS[i].label}<span style="opacity:0.6;margin-left:8px;font-size:9px;">${keyHint}</span>`
+      elementBtns[i].style.background  = `${color}28`
+      elementBtns[i].style.borderColor = `${color}dd`
+      elementBtns[i].style.boxShadow   = `0 0 15px ${color}77, 0 0 5px ${color}99`
+      elementBtns[i].style.transform   = 'scale(1.0)'
     } else {
+      elementBtns[i].innerHTML = `<span style="opacity:0.6;margin-right:6px;">${emoji}</span>${ELEMENTS[i].label}<span style="opacity:0.4;margin-left:8px;font-size:9px;">${keyHint}</span>`
       elementBtns[i].style.background  = `${color}0d`
       elementBtns[i].style.borderColor = `${color}44`
       elementBtns[i].style.boxShadow   = 'none'
+      elementBtns[i].style.transform   = 'scale(1.0)'
     }
   })
 }
@@ -777,6 +798,13 @@ function enterPlanet(idx: number) {
     backToSystemBtn.style.display = 'block'
     restartBtn.style.display = 'block'
     planetStatus.style.display = 'block'
+    planetInfoPanel.style.display = 'block'
+    
+    // Update planet info panel
+    const tempIcon = pi.tempNorm > 0.65 ? '🔥' : pi.tempNorm < 0.35 ? '❄' : '◌'
+    const tempLabel = pi.tempNorm > 0.65 ? 'hot' : pi.tempNorm < 0.35 ? 'frozen' : 'temperate'
+    planetInfoPanel.innerHTML = `${tempIcon} ${tempLabel} world`
+    
     updateElementUI()
     overlay.style.opacity = '0'
     // Show world-temperature hint in event picker
@@ -832,6 +860,25 @@ planetStatus.style.cssText = `
   color:rgba(255,255,255,0.38); pointer-events:none; display:none; white-space:nowrap;
 `
 document.body.appendChild(planetStatus)
+
+// Time pressure overlay - pulses red when time is running low
+const timePressureOverlay = document.createElement('div')
+timePressureOverlay.style.cssText = `
+  position:fixed; inset:0; pointer-events:none; display:none;
+  border:3px solid rgba(255,68,34,0); transition:border-color 0.15s;
+  box-shadow:inset 0 0 60px rgba(255,68,34,0);
+`
+document.body.appendChild(timePressureOverlay)
+
+// Planet info panel - shows temperature and zone info
+const planetInfoPanel = document.createElement('div')
+planetInfoPanel.style.cssText = `
+  position:fixed; top:60px; left:50%; transform:translateX(-50%);
+  font-family:'Courier New',monospace; font-size:9px; letter-spacing:.12em;
+  color:rgba(255,255,255,0.28); pointer-events:none; display:none;
+  white-space:nowrap; text-align:center;
+`
+document.body.appendChild(planetInfoPanel)
 
 // Restart button (planet view) — top-right corner, unobtrusive
 const restartBtn = document.createElement('div')
@@ -916,6 +963,8 @@ function exitPlanet() {
   backToSystemBtn.style.display = 'none'
   restartBtn.style.display = 'none'
   planetStatus.style.display = 'none'
+  planetInfoPanel.style.display = 'none'
+  timePressureOverlay.style.display = 'none'
   label.style.display = 'none'
   thoughtBubble.style.display = 'none'
   setTimeout(() => {
@@ -1220,6 +1269,26 @@ document.addEventListener('mousemove', (e) => {
     solarCamPhi = Math.max(0.05, Math.min(Math.PI - 0.05, solarCamPhi + solarVelPhi))
   }
   prevMouseX = e.clientX; prevMouseY = e.clientY
+})
+
+// Keyboard shortcuts for element selection (planet view)
+document.addEventListener('keydown', (e) => {
+  if (state !== 'planet' && state !== 'life-sim') return
+  
+  // Number keys 1-4 select elements: 1=fire, 2=water, 3=earth, 4=air
+  const keyMap: Record<string, ElementKey> = {
+    '1': 'fire',
+    '2': 'water',
+    '3': 'earth',
+    '4': 'air'
+  }
+  
+  const element = keyMap[e.key]
+  if (element) {
+    e.preventDefault()
+    selectedElement = selectedElement === element ? null : element
+    updateElementUI()
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -1562,14 +1631,37 @@ function animate(t: number) {
           ? `<span style="color:rgba(255,255,255,0.22);font-size:9px">click the glowing zone  </span>`
           : ''
 
+        // Challenge difficulty indicator
+        const difficultyStars = Math.min(4, cd.steps.length)
+        const difficultyHtml = `<span style="color:rgba(255,200,100,0.5);font-size:8px">${'⭐'.repeat(difficultyStars)}</span>`
+        
+        // Challenge count
+        const challengeCountHtml = `<span style="color:rgba(255,255,255,0.25);font-size:9px">challenge ${cd.completedCount + 1}</span>`
+
         planetStatus.innerHTML =
+          `${challengeCountHtml} ${difficultyHtml}` +
+          `<span style="opacity:0.25"> │ </span>` +
           `${hintHtml}${stepHtml}${flashHtml}` +
           `<span style="opacity:0.3"> │ </span>` +
           `${timerBar}` +
           `<span style="opacity:0.3"> │ </span>` +
           `${attBar} <span style="color:rgba(255,255,255,0.35)">${Math.round(att * 100)}%</span>`
+        
+        // Time pressure visual effect (using timerFrac calculated above)
+        if (timerFrac < 0.3) {
+          // Last 30% of time - show pulsing red border
+          timePressureOverlay.style.display = 'block'
+          const pulse = 0.5 + Math.sin(t * 0.008) * 0.5  // Pulse effect
+          const intensity = (0.3 - timerFrac) / 0.3  // 0 to 1 as time runs out
+          const opacity = intensity * 0.6 * pulse
+          timePressureOverlay.style.borderColor = `rgba(255,68,34,${opacity})`
+          timePressureOverlay.style.boxShadow = `inset 0 0 ${60 * intensity}px rgba(255,68,34,${opacity * 0.5})`
+        } else {
+          timePressureOverlay.style.display = 'none'
+        }
       } else {
         planetStatus.innerHTML = ''
+        timePressureOverlay.style.display = 'none'
       }
 
       updateElementUI()
